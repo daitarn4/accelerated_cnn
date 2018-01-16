@@ -9,6 +9,7 @@ LIB_AOC_2 := $(OPENCL_ROOT)/host/linux64/lib
 SRC_AOCL := $(wildcard ../common/src/AOCLUtils/*.cpp)
 
 
+
 GPU=0
 CUDNN=0
 OPENCV=0
