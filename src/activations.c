@@ -5,18 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Added to include FPGA OpenCL kernel
-#include "CL/opencl.h"
-#include "AOCLUtils/aocl_utils.h"
-
-extern static const size_t work_group_size;  
-// OpenCL runtime configuration
-extern static cl_platform_id platform;
-extern static cl_device_id device;
-extern static cl_context context;
-extern static cl_command_queue queue;
-extern static cl_kernel kernel;
-extern static cl_program program;
 
 
 
@@ -107,48 +95,6 @@ float activate(float x, ACTIVATION a)
     return 0;
 }
 
-void activate_array(float* x, const int n, const ACTIVATION a)
-{
-	// data
-	cl_int status;
-    	int i;
-
-	// code
-	if (a == LEAKY)
-	{
-		// Call the FPGA kernel
-		fprintf(stdout, "\n\n*** [FPGA] Launching the kernel...\n\n");
-  		// Configure work set over which the kernel will execute
-  		size_t wgSize[3] = {work_group_size, 1, 1};
-  		size_t gSize[3] = {work_group_size, 1, 1};
-  		// Create input variables to pass input-output data with the kernel
-		cl_mem inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, no_words * sizeof(int), NULL, NULL);
-		cl_mem outbuf = clCreateBuffer(context, CL_MEM_READ_ONLY, no_words * sizeof(int), NULL, NULL);
-		// Write input to the kernel
-		clEnqueueWriteBuffer(queue, inbuf, CL_TRUE, 0, sizeof(float) * n, &x, 0, NULL, NULL);
-		//Set arguements
-		clSetKernelArg(kernel, 0, sizeof(cl_mem), &inbuf);
-		clSetKernelArg(kernel, 1, sizeof(cl_mem), &outbuf);
-		clSetKernelArg(kernel, 2, sizeof(int), (void*)&n);
-		// Launch the kernel
-  		status = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-  		checkError(status, "Failed to launch kernel");
-		// Reading output
-		clEnqueueReadBuffer(queue, outbuf, CL_TRUE, 0, sizeof(float) * n, &x, 0, NULL, NULL);	
-		// Completed
-		status = clFinish(queue);
-		checkError(status, "Failed to finish");
-		fprintf(stdout, "\n\n*** [FPGA] Kernel execution completed\n\n");
-	}
-	else
-	{
-		// perform the activation using host code
-    		for(i = 0; i < n; ++i)
-		{
-        		x[i] = activate(x[i], a);
-    		}
-	}
-}
 
 float gradient(float x, ACTIVATION a)
 {

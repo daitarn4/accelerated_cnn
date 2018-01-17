@@ -8,10 +8,17 @@
 ACTIVATION get_activation(char *s);
 
 char *get_activation_string(ACTIVATION a);
-float activate(float x, ACTIVATION a);
 float gradient(float x, ACTIVATION a);
 void gradient_array(const float *x, const int n, const ACTIVATION a, float *delta);
+#ifdef __cplusplus
+    extern "C" {
+#endif
+float activate(float x, ACTIVATION a);
 void activate_array(float *x, const int n, const ACTIVATION a);
+#ifdef __cplusplus
+    }
+#endif
+
 #ifdef GPU
 void activate_array_gpu(float *x, int n, ACTIVATION a);
 void gradient_array_gpu(float *x, int n, ACTIVATION a, float *delta);
@@ -81,6 +88,8 @@ static inline float ramp_gradient(float x){return (x>0)+.1;}
 static inline float leaky_gradient(float x){return (x>0) ? 1 : .1;}
 static inline float tanh_gradient(float x){return 1-x*x;}
 static inline float plse_gradient(float x){return (x < 0 || x > 1) ? .01 : .125;}
+
+
 
 #endif
 

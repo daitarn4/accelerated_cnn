@@ -1,4 +1,5 @@
 #include "convolutional_layer.h"
+#include "darknet_kernels.h"
 #include "utils.h"
 #include "batchnorm_layer.h"
 #include "im2col.h"
@@ -453,7 +454,10 @@ void forward_convolutional_layer(convolutional_layer l, network net)
         binarize_cpu(net.input, l.c*l.h*l.w*l.batch, l.binary_input);
         net.input = l.binary_input;
     }
-
+#define FPGA
+#ifdef FPGA
+    forward_convolution_fpga(l,net);
+#else
     int m = l.n/l.groups;
     int k = l.size*l.size*l.c/l.groups;
     int n = l.out_w*l.out_h;
@@ -468,6 +472,7 @@ void forward_convolutional_layer(convolutional_layer l, network net)
             gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
         }
     }
+#endif
 
     if(l.batch_normalize){
         forward_batchnorm_layer(l, net);
