@@ -1,0 +1,1 @@
+aoc -board p385a_sch_ax115 -march=emulator -fp-relaxed -v -report -DALTERA_CL darknet.cl
