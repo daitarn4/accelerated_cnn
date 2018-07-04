@@ -78,6 +78,9 @@ void resize_maxpool_layer(maxpool_layer *l, int w, int h)
 
 void forward_maxpool_layer(const maxpool_layer l, network net)
 {
+#ifdef FPGA
+	forward_maxpool_layer_fpga(l,net);
+#else
     int b,i,j,k,m,n;
     int w_offset = -l.pad;
     int h_offset = -l.pad;
@@ -111,6 +114,7 @@ void forward_maxpool_layer(const maxpool_layer l, network net)
             }
         }
     }
+#endif
 }
 
 void backward_maxpool_layer(const maxpool_layer l, network net)

@@ -20,7 +20,7 @@
 #include <pthread.h>
 #endif
 #ifndef LINUX
-#include "Windows.h"
+//#include "Windows.h"
 #define usleep Sleep
 #endif
 

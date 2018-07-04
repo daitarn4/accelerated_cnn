@@ -34,6 +34,14 @@ route_layer make_route_layer(int batch, int n, int *input_layers, int *input_siz
     l.delta_gpu =  cuda_make_array(l.delta, outputs*batch);
     l.output_gpu = cuda_make_array(l.output, outputs*batch);
     #endif
+    #ifdef FPGA
+    #ifdef HARDWARE
+	cl_context context = GetFPGAContext();
+	cl_int status;
+	l.fpga_outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, outputs * sizeof(float), NULL, &status);
+    #endif
+    #endif
+
     return l;
 }
 
@@ -73,6 +81,9 @@ void resize_route_layer(route_layer *l, network *net)
 
 void forward_route_layer(const route_layer l, network net)
 {
+#ifdef FPGA
+	forward_route_layer_fpga(l,net);
+#else
     int i, j;
     int offset = 0;
     for(i = 0; i < l.n; ++i){
@@ -84,6 +95,7 @@ void forward_route_layer(const route_layer l, network net)
         }
         offset += input_size;
     }
+#endif
 }
 
 void backward_route_layer(const route_layer l, network net)

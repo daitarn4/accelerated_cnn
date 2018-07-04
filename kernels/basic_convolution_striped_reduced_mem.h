@@ -11,10 +11,6 @@
 
 #include "basic_convolution_striped.h"
 
-// Stay within a single block ram
-#define MAX_BATCH_SIZE (49)
-#define MAX_PADDING_SPACE (512*3)
-#define MAX_INPUT_IMAGE_BATCH ((8192)-MAX_PADDING_SPACE)
 
 #ifdef __cplusplus
     extern "C" {
@@ -66,7 +62,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 					   int out_f,
 					   int stride,
 					   int batches_of_49,
-					   int div_y);
+					   int y_div);
 					   //int input_batches); // Reduces the amount of output cache memory required
 
 #ifdef __cplusplus

@@ -125,7 +125,7 @@ coeff_vector read_channel_intel(coeff_vector *chan)
 	return chan[coeff_output_counter++];
 }
 
-extern "C" void clear_channel(){free(coeff_channel);coeff_channel=NULL;coeff_input_counter=0;coeff_output_counter=0;}
+extern "C" void clear_channel(){if (coeff_channel)free(coeff_channel);coeff_channel=NULL;coeff_input_counter=0;coeff_output_counter=0;}
 
 #endif
 

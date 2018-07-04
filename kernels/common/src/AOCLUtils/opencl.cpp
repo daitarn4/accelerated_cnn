@@ -25,6 +25,7 @@
 
 #ifdef _WIN32 // Windows
 #include <windows.h>
+#include <malloc.h>
 #else         // Linux
 #include <stdio.h> 
 #include <unistd.h> // readlink, chdir
@@ -41,6 +42,7 @@ static const char *const VERSION_STR = "170";
 // This is the minimum alignment requirement to ensure DMA can be used.
 const unsigned AOCL_ALIGNMENT = 64;
 
+
 #ifdef _WIN32 // Windows
 void *alignedMalloc(size_t size) {
   return _aligned_malloc (size, AOCL_ALIGNMENT);
@@ -53,7 +55,11 @@ void alignedFree(void * ptr) {
 void *alignedMalloc(size_t size) {
   void *result = NULL;
   int rc;
+#ifdef HARDWARE
   rc = posix_memalign (&result, AOCL_ALIGNMENT, size);
+#else
+  result = malloc(size);
+#endif
   return result;
 }
 
@@ -259,11 +265,16 @@ bool setCwdToExeDir() {
 #else         // Linux
   // Get path of executable.
   char path[300];
+/*#ifdef HARDWARE
   ssize_t n = readlink("/proc/self/exe", path, sizeof(path)/sizeof(path[0]) - 1);
+
   if(n == -1) {
     return false;
   }
   path[n] = 0;
+#else*/
+  return true;
+//#endif
 #endif
 
   // Find the last '\' or '/' and terminate the path there; it is now

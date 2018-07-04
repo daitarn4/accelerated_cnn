@@ -75,10 +75,8 @@ void basic_convolution_striped_load_coeffs_kernel_reduced_mem(
 
 							for ( h = -pad; h < (kernel_size-pad); h++)
 							{
-								last = (y == (y_div-1)) &&
-										(out_batch == (batches_of_49-1)) &&
+								last = 
 												(i_f == (in_f-STRIPES)) &&
-												(o_f == (out_f-STRIPES))&&
 												(h ==  (kernel_size-pad-1))? 1: 0;
 								for ( w =-pad; w < (kernel_size-pad+last); w++)
 								{
@@ -88,7 +86,7 @@ void basic_convolution_striped_load_coeffs_kernel_reduced_mem(
 		#pragma unroll
 										for ( q = 0; q < STRIPES; q++)
 										{
-											vec.coeffs[q] = coeffs[c++];
+											vec.coeffs[q] = (w==(kernel_size-pad))?0:coeffs[c++];
 										}
 										write_channel_intel(coeff_channel_rdmem,vec);
 	#ifndef ALTERA_CL
@@ -139,15 +137,14 @@ void basic_convolution_striped_kernel_reduced_mem(
 	coeff_vector kernel_mask_B[STRIPES];
 #define OUTPUT_CACHE_SIZE (112*112)
 #ifndef ALTERA_CL
-	auto img_cache = new float[ MAX_INPUT_IMAGE_BATCH +MAX_PADDING_SPACE][STRIPES];
+	auto img_cache = new float[ 4*MAX_INPUT_IMAGE_BATCH +MAX_PADDING_SPACE][STRIPES];
 	auto out_cache = new float[ MAX_BATCH_SIZE][STRIPES];
 #else
-	float img_cache[MAX_INPUT_IMAGE_BATCH +MAX_PADDING_SPACE][STRIPES];
+	float img_cache[2*MAX_INPUT_IMAGE_BATCH +MAX_PADDING_SPACE][STRIPES];
 	float out_cache[MAX_BATCH_SIZE][STRIPES];
 #endif
 
 	short ksize =  (kernel_size*kernel_size);
-	char first = 1;
 	short sizex,sizey;
 	short out_sizex,out_sizey;
 	sizex = size;
@@ -158,7 +155,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 	bool toggle = 0;
 	unsigned int out_y_div_offset=0;
 	char pad_compensate = pad;
-	unsigned short offset_increment = (sizex*(sizey+(pad_compensate<<1)));
+	unsigned int offset_increment = (sizex*(sizey+(pad_compensate<<1)));
 	for (int yy_div = 0; yy_div < y_div; yy_div++)
 	{
 		y_div_offset = yy_div*sizey;
@@ -170,17 +167,20 @@ void basic_convolution_striped_kernel_reduced_mem(
 			{
 				short x,y;
 				x = 0;
-				y = -pad_compensate;
+				y = -pad_compensate + (sizey*yy_div);
 				int input_index = (i_f*size*size)+  (yy_div*sizey*sizex<<STRIPES_DIV);
 				int s = (i_f*size*size) + ((yy_div*sizey-pad_compensate)*(sizex<<STRIPES_DIV));
-				while (y < (sizey+pad_compensate))
+				while (y < ((1+yy_div)*sizey+pad_compensate))
 				{
 					int input_index2 = s;
+					// check for halo
+					bool halo = ((x < 0) || (x >= size) || (y >= size) || (y < 0))?true:false;
 
 					#pragma unroll
 					for (int p = 0; p < STRIPES; p++)
 					{
-						img_cache[d][p] = input_index2 < 0?0:input[input_index2+p];
+						float val = halo?0:(input_index2 < 0?0:input[input_index2+p]);
+						img_cache[d][p] = val;
 					}
 					x = x != (sizex-1)? x+1:0;
 					y = x == 0 ? y+1:y;
@@ -192,12 +192,12 @@ void basic_convolution_striped_kernel_reduced_mem(
 		// Coefficient count
 		c = 0;
 		unsigned int o=0;
-		unsigned output_offset = 0;
+		unsigned int output_offset = 0;
 
 		for (short o_f = 0; o_f < out_f; o_f +=STRIPES)
 		{
-			unsigned short coefficent_load_count = 0;
-			unsigned short batch_pointer = 0;
+			unsigned int coefficent_load_count = 0;
+			unsigned int batch_pointer = 0;
 			unsigned int out_batch_offset = 0;
 			for (short out_batch = 0; out_batch < batches_of_49; out_batch++)
 			{
@@ -206,6 +206,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 				unsigned int in_offset = 0;//(j*in_f*sizex*sizey) + (i*groups*in_f*sizex*sizey);
 				short out_batch_count = 0;
 				short i_f = 0;
+				char first = 1;
 				char w = -(pad+first);
 				char h = -(pad);
 				xx = batch_pointer%(sizex);
@@ -245,7 +246,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 					}
 
 					bool out_of_bounds = ((h+y+y_div_offset) < 0) || ((w+x) < 0) || ((h+y+y_div_offset) >= size) || ((w+x) >= size);
-					short index = (w+x) + ((h+(y+pad_compensate))*sizex) + in_offset; // Compensate for extra padding held in memory
+					int index = (w+x) + ((h+(y+pad_compensate))*sizex) + in_offset; // Compensate for extra padding held in memory
 
 #pragma unroll
 					for (int q = 0; q < STRIPES; q++)
@@ -293,12 +294,16 @@ void basic_convolution_striped_kernel_reduced_mem(
 					w =(out_batch_count==0)? ((w != (kernel_size-pad-1))?w+1:-(pad+first)):w;
 					h =((out_batch_count==0) && (w==-(pad+first)))?((h != (kernel_size-pad-1))?h+1:-(pad)):h;
 					first =(out_batch_count==0) ? 0 : first;
+
 				}
 				unsigned short cache=0;
 				//unsigned int oo = (o_f *out_size*out_size) + (STRIPES*out_batch*MAX_BATCH_SIZE) + (STRIPES*yy_div*out_sizey*out_sizex);
 				unsigned int oo = output_offset + out_batch_offset + out_y_div_offset;
+				unsigned int oo_x,oo_y;
+
 				for ( cache = 0; cache < MAX_BATCH_SIZE; cache++)
 				{
+
 					#pragma unroll
 					for (int q = 0; q < STRIPES; q++)
 					{
@@ -308,11 +313,12 @@ void basic_convolution_striped_kernel_reduced_mem(
 				batch_pointer += (MAX_BATCH_SIZE*stride);
 				out_batch_offset += (STRIPES*MAX_BATCH_SIZE);
 			}
-			output_offset += (STRIPES*out_size*out_size);
+			output_offset += (STRIPES*out_size*out_size); // Group of stripes targeted
 		}
-		out_y_div_offset += (STRIPES*out_sizey*out_sizex);
+		out_y_div_offset += (STRIPES*out_sizey*out_size); // offset within each striped block
 	}
 #ifndef ALTERA_CL
+	printf("count = %d\n",count);
 	delete img_cache;
 	delete out_cache;
 #endif

@@ -5,9 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-
-
 char *get_activation_string(ACTIVATION a)
 {
     switch(a){
@@ -31,6 +28,8 @@ char *get_activation_string(ACTIVATION a)
             return "plse";
         case LEAKY:
             return "leaky";
+        case BINARY:
+            return "binary";
         case STAIR:
             return "stair";
         case HARDTAN:
@@ -56,6 +55,7 @@ ACTIVATION get_activation(char *s)
     if (strcmp(s, "linear")==0) return LINEAR;
     if (strcmp(s, "ramp")==0) return RAMP;
     if (strcmp(s, "leaky")==0) return LEAKY;
+    if (strcmp(s, "binary")==0) return BINARY;
     if (strcmp(s, "tanh")==0) return TANH;
     if (strcmp(s, "stair")==0) return STAIR;
     fprintf(stderr, "Couldn't find activation function %s, going with ReLU\n", s);
@@ -81,6 +81,8 @@ float activate(float x, ACTIVATION a)
             return ramp_activate(x);
         case LEAKY:
             return leaky_activate(x);
+        case BINARY:
+            return binary_activate(x);
         case TANH:
             return tanh_activate(x);
         case PLSE:
@@ -95,6 +97,13 @@ float activate(float x, ACTIVATION a)
     return 0;
 }
 
+void activate_array(float *x, const int n, const ACTIVATION a)
+{
+    int i;
+    for(i = 0; i < n; ++i){
+        x[i] = activate(x[i], a);
+    }
+}
 
 float gradient(float x, ACTIVATION a)
 {
@@ -114,6 +123,8 @@ float gradient(float x, ACTIVATION a)
         case RAMP:
             return ramp_gradient(x);
         case LEAKY:
+            return leaky_gradient(x);
+        case BINARY:
             return leaky_gradient(x);
         case TANH:
             return tanh_gradient(x);

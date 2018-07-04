@@ -1,5 +1,7 @@
 #include "convolutional_layer.h"
+#ifdef FPGA
 #include "darknet_kernels.h"
+#endif
 #include "utils.h"
 #include "batchnorm_layer.h"
 #include "im2col.h"
@@ -25,7 +27,7 @@ void swap_binary(convolutional_layer *l)
     l->binary_weights_gpu = swap;
 #endif
 }
-
+   
 void binarize_weights(float *weights, int n, int size, float *binary)
 {
     int i, f;
@@ -36,7 +38,7 @@ void binarize_weights(float *weights, int n, int size, float *binary)
         }
         mean = mean / size;
         for(i = 0; i < size; ++i){
-            binary[f*size + i] = (weights[f*size + i] > 0) ? mean : -mean;
+            binary[f*size + i] =  (weights[f*size + i] > 0) ? mean : -mean;
         }
     }
 }
@@ -258,6 +260,48 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
         l.scale_v = calloc(n, sizeof(float));
     }
 
+#ifdef FPGA
+#ifdef HARDWARE
+    printf("setup layer\n");
+    l.first = 1;// Load coeffs once
+    // Create buffers and setup hardware if required
+    cl_context context = GetFPGAContext();
+    if (context == 0) // Then hardware not initialised
+    {
+    	host_setup(l.binary);
+    	context = GetFPGAContext();
+    }
+
+    cl_int status;
+    // buffers need to multiples of STRIPES
+   	int ln_rounded = l.n;
+	if (l.n%STRIPES)
+	{
+		ln_rounded += STRIPES-(l.n%STRIPES);
+	}
+
+    //l.fpga_inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*l.w*l.h*(l.c < STRIPES?STRIPES:l.c) * sizeof(float), NULL, &status);
+    
+    int l_c = l.c;
+    int l_n = l.n;
+    l_c = (l.c%STRIPES)?l.c + (STRIPES-(l.c%STRIPES)):l.c;
+    l_n = (l.n%STRIPES)?l.n + (STRIPES-(l.n%STRIPES)):l.n;
+    l.fpga_outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, l.w*l.h*l_n* sizeof(float), NULL, &status);
+    // binary size
+    
+    l.fpga_coeffbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*l.size*l.size*l_c*l_n / STRIPES, NULL, &status);
+    l.fpga_scales_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, ln_rounded * sizeof(float), NULL, &status);
+    l.fpga_biases_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 1024 * 4 * sizeof(float), NULL, &status);
+    /*printf("coeff buf status = %d\n",status);
+    if (l.binary)
+       l.fpga_binaryscalebuf = clCreateBuffer(context, CL_MEM_READ_WRITE, l.nweights * sizeof(float), NULL, &status);
+    l.fpga_div_sqrt_variance_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*ln_rounded * sizeof(float), NULL, &status);
+    l.fpga_rolling_mean_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*ln_rounded * sizeof(float), NULL, &status);
+    l.fpga_scales_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*ln_rounded * sizeof(float), NULL, &status);
+    l.fpga_biases_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*ln_rounded * sizeof(float), NULL, &status);*/
+#endif
+#endif
+
 #ifdef GPU
     l.forward_gpu = forward_convolutional_layer_gpu;
     l.backward_gpu = backward_convolutional_layer_gpu;
@@ -321,8 +365,9 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
 #endif
     l.workspace_size = get_workspace_size(l);
     l.activation = activation;
-
-    fprintf(stderr, "conv  %5d %2d x%2d /%2d  %4d x%4d x%4d   ->  %4d x%4d x%4d\n", n, size, size, stride, w, h, c, l.out_w, l.out_h, l.out_c);
+    // Calculate clocks required to process each layer!
+    unsigned int clocks = l.out_w*l.out_h*l.out_c*l.c * size*size;
+    fprintf(stderr, "conv  %5d %2d x%2d /%2d  %4d x%4d x%4d   ->  %4d x%4d x%4d %d\n", n, size, size, stride, w, h, c, l.out_w, l.out_h, l.out_c,clocks);
 
     return l;
 }
@@ -442,45 +487,247 @@ void backward_bias(float *bias_updates, float *delta, int batch, int n, int size
     }
 }
 
+
+
+int lcount = 0;
 void forward_convolutional_layer(convolutional_layer l, network net)
 {
     int i, j;
 
-    fill_cpu(l.outputs*l.batch, 0, l.output, 1);
-
-    if(l.xnor){
-        binarize_weights(l.weights, l.n, l.c/l.groups*l.size*l.size, l.binary_weights);
-        swap_binary(&l);
-        binarize_cpu(net.input, l.c*l.h*l.w*l.batch, l.binary_input);
-        net.input = l.binary_input;
-    }
-#define FPGA
+   // fill_cpu(l.outputs*l.batch, 0, l.output, 1);
 #ifdef FPGA
-    forward_convolution_fpga(l,net);
-#else
-    int m = l.n/l.groups;
-    int k = l.size*l.size*l.c/l.groups;
-    int n = l.out_w*l.out_h;
-    for(i = 0; i < l.batch; ++i){
-        for(j = 0; j < l.groups; ++j){
-            float *a = l.weights + j*l.nweights/l.groups;
-            float *b = net.workspace;
-            float *c = l.output + (i*l.groups + j)*n*m;
-
-            im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
-                l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
-            gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
+    if (l.fpga_load || l.first)
+#endif	
+    if(l.xnor || l.binary){
+    	printf("binary convolution\n");
+	if (l.first)
+	        binarize_weights(l.weights, l.n, l.c/l.groups*l.size*l.size, l.binary_weights);
+        swap_binary(&l);
+        if (l.xnor)
+        {
+			binarize_cpu(net.input, l.c*l.h*l.w*l.batch, l.binary_input);
+			net.input = l.binary_input;
         }
     }
+#ifdef FPGA
+#define BINARY_NETWORK_TEST
 #endif
+#ifdef BINARY_NETWORK_TEST
+    if (l.binary)// && (l.w == 416) && (l.stride == 2) && (l.c==32) && (l.n == 64))
+    {
+        /*printf("fpga binary!\n");
+	int c,i;
+        for (c = 0; c < l.c; c++)
+    	for (i = 0; i < l.w*l.w; i++)
+    	{
+    		//net.input[i + (c*l.w*l.w)] = 1;//(float)c/1024.0f;
+    	}
+    	for (i = 0; i < l.nweights; i++)
+    	{
+    		//l.weights[i] = 1;//(i&0x1)?1.0f:-1.0f;
+    	}*/
 
-    if(l.batch_normalize){
-        forward_batchnorm_layer(l, net);
-    } else {
-        add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+    	forward_convolution_fpga_binary_v2(l,net);
+//#define TEST
+#ifdef TEST
+    	unsigned int size = l.out_w*l.out_w*l.n;
+    	float *temp = (float*)malloc(size*4);
+	//int i;
+    	for (i = 0; i < size; i++)
+    	{
+    		temp[i] = l.output[i];
+    		l.output[i] = 0;
+    	}
+
+    	int m = l.n/l.groups;
+		int k = l.size*l.size*l.c/l.groups;
+		int n = l.out_w*l.out_h;
+		for(i = 0; i < l.batch; ++i){
+			for(j = 0; j < l.groups; ++j){
+				float *a = l.weights + j*l.nweights/l.groups;
+				float *b = net.workspace;
+				float *c = l.output + (i*l.groups + j)*n*m;
+
+				im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+					l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
+				gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
+			}
+		}
+
+		if(l.batch_normalize){
+			forward_batchnorm_layer(l, net);
+		  } else {
+			add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+		}
+		activate_array(l.output, l.outputs*l.batch, l.activation);
+
+		size = l.out_w*l.out_w*l.n;
+	int errors = 0;
+    	for ( i = 0; i < size; i++)
+    	{
+    		int a,b;
+    		a =temp[i]*1024;
+    		b =l.output[i]*1024;
+
+    		if (fabs(a-b) > 64)
+    		//if (fabs(a-b) > 32)
+    		{
+    			printf("fpga does not match software! %d vs %d @ %d\n",a,b,i);
+			errors++;
+    		}
+		if (errors > 32) break;
+    	}
+
+
+#endif
+    }
+    else
+    {
+        printf("cpu binary!\n");
+	    int m = l.n/l.groups;
+		int k = l.size*l.size*l.c/l.groups;
+		int n = l.out_w*l.out_h;
+		for(i = 0; i < l.batch; ++i){
+			for(j = 0; j < l.groups; ++j){
+				float *a = l.weights + j*l.nweights/l.groups;
+				float *b = net.workspace;
+				float *c = l.output + (i*l.groups + j)*n*m;
+
+				im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+					l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
+				gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
+			}
+		}
+
+		if(l.batch_normalize){
+			forward_batchnorm_layer(l, net);
+		  } else {
+			add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+		}
+		activate_array(l.output, l.outputs*l.batch, l.activation);
+    }
+#else
+
+#ifdef FPGA
+    //if (/*(l.w == 13) ||*/ (l.w == 26)// || (l.w == 52) || (l.w == 104) || (l.w == 208) || (l.w == 416))
+//    	&& (lcount < 17))
+    	//if ((l.w == l.w))
+		{
+    		int k  = 0;
+    		for (int j = 0; j < l.c; j++)
+    		for (int i = 0; i <l.w*l.w;i++)
+    		{
+        		//net.input[k++] = j;
+        	}
+
+    		k  = 0;
+    		for (int j = 0; j < l.c; j++)
+    		for (int i = 0; i <l.n*l.size*l.size;i++)
+    		{
+        		//sl.weights[k++] = 1;
+        	}
+
+
+    		forward_convolution_fpga(l,net);
+
+   // 		for (int i = 0; i < l.w*l.w*l.c;i++)
+    //			if (net.input[i] != 1)
+    	//			printf("Corrupted\n");
+    		//for (int i = 0; i <l.c*l.n*l.size*l.size;i++)
+    			//if(l.weights[i] != 1)
+    				//printf("Corrupted\n");
+
+    		k  = 0;
+    		for (int j = 0; j < l.c; j++)
+    		for (int i = 0; i <l.w*l.w;i++)
+    		{
+        		//net.input[k++] = j;
+        	}
+    		for (int j = 0; j < l.c; j++)
+    		for (int i = 0; i <l.n*l.size*l.size;i++)
+    		{
+        		//l.weights[k++] = j;
+        	}
+    		printf("lcount = %d\n",lcount);
+        	lcount++;
+        	// Save fpga to compare with gold to work out what is wrong
+        	unsigned int size = l.out_w*l.out_w*l.n;
+        	float *temp = (float*)malloc(size*4);
+        	for (int i = 0; i < size; i++)
+        	{
+        		temp[i] = l.output[i];
+        		l.output[i] = 0;
+        	}
+
+            {
+        		int m = l.n/l.groups;
+        		int k = l.size*l.size*l.c/l.groups;
+        		int n = l.out_w*l.out_h;
+        		for(i = 0; i < l.batch; ++i){
+        			for(j = 0; j < l.groups; ++j){
+        				float *a = l.weights + j*l.nweights/l.groups;
+        				float *b = net.workspace;
+        				float *c = l.output + (i*l.groups + j)*n*m;
+
+        				im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+        					l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
+        				gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
+        			}
+        		}
+        		if(l.batch_normalize){
+        			forward_batchnorm_layer(l, net);
+        		  } else {
+        			add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+        		}
+        		activate_array(l.output, l.outputs*l.batch, l.activation);
+            }
+            int errors  = 0;
+        	for (int i = 0; i < size; i++)
+        	{
+        		if (fabs(l.output[i]) > 0.0001)
+        		if ((temp[i]/l.output[i]) > 1.01)
+        		{
+        			if (errors < 5)
+        			printf("%d = %f - %f\n",i,temp[i],l.output[i]);
+        			errors++;
+        		}
+        	}
+            free(temp);
+		}
+#else
+    //else
+	printf("standard\n");
+    {
+		int m = l.n/l.groups;
+		int k = l.size*l.size*l.c/l.groups;
+		int n = l.out_w*l.out_h;
+		for(i = 0; i < l.batch; ++i){
+			for(j = 0; j < l.groups; ++j){
+				float *a = l.weights + j*l.nweights/l.groups;
+				float *b = net.workspace;
+				float *c = l.output + (i*l.groups + j)*n*m;
+
+				im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+					l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
+				gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
+			}
+		}
+		if(l.batch_normalize){
+			forward_batchnorm_layer(l, net);
+		  } else {
+			add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+		}
+		activate_array(l.output, l.outputs*l.batch, l.activation);
     }
 
-    activate_array(l.output, l.outputs*l.batch, l.activation);
+#endif
+#endif
+
+#ifndef FPGA
+#else
+    // Handled as part of convolution
+#endif
+
     if(l.binary || l.xnor) swap_binary(&l);
 }
 
