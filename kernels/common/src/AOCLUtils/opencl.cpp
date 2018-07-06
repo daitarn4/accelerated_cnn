@@ -56,7 +56,11 @@ void *alignedMalloc(size_t size) {
   void *result = NULL;
   int rc;
 #ifdef HARDWARE
+#ifdef CYGWIN
+  result = malloc(size);
+#else
   rc = posix_memalign (&result, AOCL_ALIGNMENT, size);
+#endif
 #else
   result = malloc(size);
 #endif

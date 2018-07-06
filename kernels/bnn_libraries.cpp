@@ -55,7 +55,11 @@ int Sum32(short input[32],unsigned int bits)
 }
 
 
+#ifdef ALTERA_CL
+int Sum16(short16 input,unsigned int bits)
+#else
 int Sum16(short input[16],unsigned int bits)
+#endif
 {
 	bool bits2[16];
 	#pragma unroll
@@ -109,21 +113,30 @@ void CountBitsHDL32x16(short input[32],unsigned int binary_coeffs[32],int result
 #pragma unroll
 	for (int p = 0; p < 32; p++)
 	{
-		results[p] += results_vec.results[p];
+		results[p] = results_vec.results[p];
 	}
 #else
 #pragma unroll
 	for (int p = 0; p < 32; p++)
-		results[p] += Sum32(input,binary_coeffs[p]);
+		results[p] = Sum32(input,binary_coeffs[p]);
 #endif
 }
 
-
+#ifdef ALTERA_CL
+int16 CountBitsHDL16x16(short16 input,uint16 binary_coeffs)
+#else
 void CountBitsHDL16x16(short input[16],unsigned int binary_coeffs[16],int results[16])
+#endif
 {
+#ifdef ALTERA_CL
+	int16 results;
+#endif
 #pragma unroll
 	for (int p = 0; p < 16; p++)
-		results[p] += Sum16(input,binary_coeffs[p]);
+		results[p] = Sum16(input,binary_coeffs[p]);
+#ifdef ALTERA_CL
+	return results;
+#endif
 }
 
 // Convert input from float to integer efficiently!

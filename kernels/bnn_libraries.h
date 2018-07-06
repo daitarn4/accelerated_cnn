@@ -17,7 +17,11 @@
 
 void CountBitsHDL32x16(short input[32],unsigned int binary_coeffs[32],int results[32]);
 
+#ifdef ALTERA_CL
+int16 CountBitsHDL16x16(short16 input,uint16 binary_coeffs);
+#else
 void CountBitsHDL16x16(short input[16],unsigned int binary_coeffs[16],int results[16]);
+#endif
 
 // Scale input
 

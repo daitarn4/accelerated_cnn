@@ -17,11 +17,11 @@
 __kernel
 void shortcut_layer_fpga(int input_block_size,
 					     int batch, int w1, int h1, int c1,
-						 __global float *restrict add,
+						 __global volatile float *restrict add,
 						 int w2, int h2, int c2, float s1, float s2,
-						 __global float *restrict in,
-						 __global float *restrict out,
-						 __global float *restrict out2 // Same as out, but allows pipelining!
+						 __global volatile float *restrict in,
+						 __global volatile float *restrict out,
+						 __global volatile float *restrict out2 // Same as out, but allows pipelining!
 						 );
 #else
 void shortcut_layer_fpga(int input_block_size,

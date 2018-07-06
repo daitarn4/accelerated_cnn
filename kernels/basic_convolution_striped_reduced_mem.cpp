@@ -180,6 +180,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 					for (int p = 0; p < STRIPES; p++)
 					{
 						float val = halo?0:(input_index2 < 0?0:input[input_index2+p]);
+
 						img_cache[d][p] = val;
 					}
 					x = x != (sizex-1)? x+1:0;
@@ -321,6 +322,7 @@ void basic_convolution_striped_kernel_reduced_mem(
 	printf("count = %d\n",count);
 	delete img_cache;
 	delete out_cache;
+
 #endif
 }
 

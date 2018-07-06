@@ -15,10 +15,19 @@
 #include <malloc.h>
 #endif
 
-#define STRIPES 32 
-#define STRIPES_DIV 5
-#define STRIPES_BIT_MASK 0xffffffff
-#define STRIPES_BITS 32
+#define STRIPES_16
+#ifdef STRIPES_16
+	#define STRIPES 16
+	#define STRIPES_DIV 4
+	#define STRIPES_BIT_MASK 0xffff
+	#define STRIPES_BITS 16
+#endif
+#ifdef STRIPES_32
+	#define STRIPES 32
+	#define STRIPES_DIV 5
+	#define STRIPES_BIT_MASK 0xffffffff
+	#define STRIPES_BITS 32
+#endif
 #define BINARY_FLOAT_SCALE 1024
 
 // Darknet 19 batchsize

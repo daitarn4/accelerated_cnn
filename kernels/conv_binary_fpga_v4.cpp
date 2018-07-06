@@ -22,19 +22,19 @@
  */
 
 #ifdef ALTERA_CL
-channel unsigned int coeff_channel_rdmem_binary2[STRIPES] __attribute__((depth(8)));
+channel unsigned int coeff_channel_rdmem_binary2[STRIPES] __attribute__((depth(511)));
 
 #else
-CHAN(unsigned int,8) coeff_channel_rdmem_binary2[STRIPES];
+CHAN(unsigned int,511) coeff_channel_rdmem_binary2[STRIPES];
 
 #endif
 
 
 #ifdef ALTERA_CL
-channel int input_channels[STRIPES] __attribute__((depth(8)));
+channel int input_channels[STRIPES] __attribute__((depth(511)));
 
 #else
-CHAN(int,8) input_channels[STRIPES];
+CHAN(int,511) input_channels[STRIPES];
 
 #endif
 
@@ -180,8 +180,17 @@ void conv_binary_subblock_fpga_v4(
 	unsigned int sub_block_x_index = 0;
 	unsigned int sub_block_y_index = 0;
 
+#ifdef ALTERA_CL
+#ifdef STRIPES_16
+	uint16 kernel_mask_A;
+#else
 	unsigned int kernel_mask_A[STRIPES];
 	unsigned int kernel_mask_B[STRIPES];
+#endif
+#else
+	unsigned int kernel_mask_A[STRIPES];
+	unsigned int kernel_mask_B[STRIPES];
+#endif
 
 	short index_offsets[9];
 	char c = 0;
@@ -194,8 +203,18 @@ void conv_binary_subblock_fpga_v4(
 
 #ifdef ALTERA_CL
 	 //__attribute__((memory,numbanks(STRIPES),bankwidth(2*STRIPES),singlepump))
-	short img_cache[MAX_INPUT_IMAGE_BATCH][STRIPES];
-	int out_cache[ MAX_OUTPUT_IMAGE_BATCH][STRIPES];
+	#ifdef STRIPES_16
+	short16 img_cache[MAX_INPUT_IMAGE_BATCH];
+	int16 out_cache[ MAX_OUTPUT_IMAGE_BATCH];
+	#elif STRIPES_32
+		short16 img_cacheA[MAX_INPUT_IMAGE_BATCH];
+		int16 out_cacheA[ MAX_OUTPUT_IMAGE_BATCH];
+		short16 img_cacheB[MAX_INPUT_IMAGE_BATCH];
+		int16 out_cacheB[ MAX_OUTPUT_IMAGE_BATCH];
+	#else
+		short img_cache[MAX_INPUT_IMAGE_BATCH][STRIPES];
+		int out_cache[ MAX_OUTPUT_IMAGE_BATCH][STRIPES];
+	#endif
 #else
 	auto img_cache = new short[MAX_INPUT_IMAGE_BATCH][STRIPES];
 	auto out_cache = new int[ MAX_OUTPUT_IMAGE_BATCH][STRIPES];
@@ -239,9 +258,21 @@ void conv_binary_subblock_fpga_v4(
 						out_of_bounds = true;
 					int index = feature_offset + ((index_x) + (index_y * size))*STRIPES;
 
+#ifdef STRIPES_32
+					short temp[32];
+					for (int p = 0; p < 32; p++)
+						temp[p] = out_of_bounds ? 0 : FloatToShort(input[index+p],BINARY_FLOAT_SCALE);
+#pragma unroll
+					for (int p = 0; p < 16; p++)
+						img_cacheA[c][p] = temp[p];
+#pragma unroll
+					for (int p = 0; p < 16; p++)
+						img_cacheB[c][p] = temp[p+16];
+#else
 #pragma unroll
 					for (int p = 0; p < STRIPES; p++)
 						img_cache[c][p] = out_of_bounds ? 0 : FloatToShort(input[index+p],BINARY_FLOAT_SCALE);
+#endif
 					c++;
 			//	}
 			//	}
@@ -270,8 +301,8 @@ void conv_binary_subblock_fpga_v4(
 			unsigned short y_offset = 0;
 			unsigned short feature_index = 0;
 
-#pragma ivdep
-			while (i_f < in_f)
+#pragma ivdep array(out_cache)
+			while (i_f < in_f)da
 			{
 
 				// Load coefficients in parallel using double buffer
@@ -290,7 +321,15 @@ void conv_binary_subblock_fpga_v4(
 				//unsigned int feature_offset_test = (i_f>>STRIPES_DIV) * copy_width * copy_height;
 				unsigned short index = (xx + (yy*copy_width)) + feature_offset;
 				unsigned short out_index = (x + (y*sub_block_width));
+#ifdef ALTERA_CL
+	 #ifdef STRIPES_16
+				short16 input_vals;
+	 #else
 				short input_vals[STRIPES];
+	 #endif
+#else
+				short input_vals[STRIPES];
+#endif
 #pragma unroll
 				for (int p = 0; p < STRIPES; p++)
 				{
@@ -306,25 +345,48 @@ void conv_binary_subblock_fpga_v4(
 #endif
 					input_vals[p] = ((i_f + p ) < l_c)?value:0;
 				}
-
-				int res[32];
-				#pragma unroll
-				for (int q = 0; q < STRIPES; q++)
-				{
-					if ((h<=0) && (w <=0) && (i_f == 0))
-						res[q] = 0;
-					else
-						res[q] = out_cache[out_index][q];
-				}
+#ifdef ALTERA_CL
+	 #ifdef STRIPES_16
+	 			int16 res;
+	 #else
+	 			int res[STRIPES];
+	 #endif
+#else
+				int res[STRIPES];
+#endif
 #ifdef STRIPES_32
 				CountBitsHDL32x16(input_vals,kernel_mask_A,res);
 #endif
 #ifdef STRIPES_16
+#ifdef ALTERA_CL
+				res = CountBitsHDL16x16(input_vals,kernel_mask_A);
+#else
 				CountBitsHDL16x16(input_vals,kernel_mask_A,res);
 #endif
+#endif
+#ifdef STRIPES_16
+#ifdef ALTERA_CL
+	if ((h<=0) && (w <=0) && (i_f == 0))
+		out_cache[out_index] = res;
+	else
+		out_cache[out_index] += res;
+#else
+#pragma unroll
+			for (int q = 0; q < STRIPES; q++)
+				if ((h<=0) && (w <=0) && (i_f == 0))
+					out_cache[out_index][q] = res[q];
+				else
+					out_cache[out_index][q] += res[q];
+#endif
+#else
 	#pragma unroll
 				for (int q = 0; q < STRIPES; q++)
-					out_cache[out_index][q] = res[q];
+					if ((h<=0) && (w <=0) && (i_f == 0))
+						out_cache[out_index][q] = res[q];
+					else
+						out_cache[out_index][q] += res[q];
+#endif
+
 /*#pragma unroll
 				for (int q = 0; q < STRIPES; q++)
 				{
@@ -526,7 +588,15 @@ void conv_activations_v4(
 				// Index in output
 				// First feature output
 				// Read input from channels
+#ifdef ALTERA_CL
+	#ifdef STRIPES_16
+				int16 input;
+	#else
 				int input[STRIPES];
+	#endif
+#else
+				int input[STRIPES];
+#endif
 
 #pragma unroll
 				for (int p = 0; p < STRIPES; p++)
@@ -539,7 +609,18 @@ void conv_activations_v4(
 				// Check y in bounds
 				bool inbounds = ((y+sub_block_y_index)>>stride_div) < out_size ? true : false;
 				out_index += (((x+sub_block_x_index)>>stride_div) + ((y+sub_block_y_index)>>stride_div) * out_size);
+
+#ifdef ALTERA_CL
+	#ifdef STRIPES_16
+				float16 leaky_activation;
+	#else
 				float leaky_activation[STRIPES];
+	#endif
+#else
+				float leaky_activation[STRIPES];
+#endif
+
+				
 				#pragma unroll
 				for (int q = 0; q < STRIPES; q++)
 				{
