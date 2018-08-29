@@ -11,6 +11,10 @@
 
 #include "basic_convolution_striped.h"
 
+typedef struct {int s[STRIPES];} vec_int;
+typedef struct {unsigned int s[STRIPES];} vec_uint;
+typedef struct {short s[STRIPES];} vec_short;
+typedef struct {float s[STRIPES];} vec_float;
 
 #ifdef __cplusplus
     extern "C" {
@@ -83,7 +87,8 @@ void conv_binary_subblock_fpga_v4(
 					   int batch_size,
 					   int step_size,
 					   int out_step_size,
-					   int l_c
+					   int l_c,
+					   unsigned int total_block_count
 					  ) ; // Reduces the amount of output cahce memory required
 					   //int input_batches); // Reduces the amount of output cache memory required
 

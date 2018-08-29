@@ -19,7 +19,7 @@
 #include "conv_binary_fpga_v3.h"
 #endif
 #ifdef V4
-#include "conv_binary_fpga_v4.h"
+#include "conv_binary_fpga_v8.h"
 #endif
 #include "basic_convolution_striped_reduced_mem.h"
 #include "basic_convolution_striped_binary.h"

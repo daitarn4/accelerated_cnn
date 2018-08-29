@@ -201,7 +201,12 @@ void forward_network(network *netp)
     int i;
     for(i = 0; i < net.n; ++i){
         net.index = i;
-        layer l = net.layers[i];
+    layer l = net.layers[i];
+#ifdef TEST
+	first = 1;
+	l.fpga_save = 1;
+	l.fpga_load = 1;
+#endif
 #ifdef FPGA
 	l.first = first;
 #endif
@@ -216,7 +221,9 @@ void forward_network(network *netp)
         }
     }
     calc_network_cost(netp);
+#ifdef FPGA
     first = 0;
+#endif
 }
 
 void update_network(network *netp)

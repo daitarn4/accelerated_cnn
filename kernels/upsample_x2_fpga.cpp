@@ -29,18 +29,22 @@ void upsample_x2_fpga(float* inbuf, float* outbuf,
 								   unsigned int stripe_output_block_size)
 #endif
 {
-	printf("upsample fpga\n");
+	//printf("upsample fpga\n");
 	unsigned int stripes_input_offset = 0;
 	unsigned int stripes_output_offset = 0;
-    for(unsigned short b = 0; b < batch; ++b){
-    	for (unsigned short i_f = 0; i_f < in_f; i_f += STRIPES)
+	unsigned int loop_size = (in_f>>STRIPES_DIV) * output_filter_size;
+    //for(unsigned short b = 0; b < batch; ++b){
+	unsigned short i_f = 0;
+	unsigned int i = 0;
+	for (unsigned int l = 0; l < loop_size; l++)
+    	//for (unsigned short i_f = 0; i_f < in_f; i_f += STRIPES)
     	{
 			unsigned short x,y;
 			unsigned short x_out,y_out;
 			x_out = y_out = 0;
 
-			for (unsigned int i = 0; i < (output_filter_size); i+= 1)
-			{
+			//for (unsigned int i = 0; i < (output_filter_size); i+= 1)
+			//{
 				x = x_out >> 1;
 				y = y_out >> 1;
 				unsigned int address = x + (((out_w>>1)&0xffff)*(y&0xffff))&0xffffffff; // Forces single DSP use
@@ -51,11 +55,17 @@ void upsample_x2_fpga(float* inbuf, float* outbuf,
 					float val = inbuf[stripes_input_offset + (address<<STRIPES_DIV) + p];
 					outbuf[stripes_output_offset + (out_address<<STRIPES_DIV) + p] = val;
 				}
-				x_out = x_out != (out_w-1)? x_out+1:0;
-				y_out = x_out == 0 ? y_out +1: y_out;
+			//}
+			x_out = x_out != (out_w-1)? x_out+1:0;
+			y_out = x_out == 0 ? ((y_out != (out_h-1))? y_out +1 : 0)
+					   : y_out;
+			i = i < output_filter_size-1? i+1:0;
+			if (i == 0)
+			{
+				i_f += STRIPES;
+				stripes_input_offset += stripe_input_block_size<<STRIPES_DIV;
+				stripes_output_offset += stripe_output_block_size<<STRIPES_DIV;
 			}
-			stripes_input_offset += stripe_input_block_size<<STRIPES_DIV;
-			stripes_output_offset += stripe_output_block_size<<STRIPES_DIV;
     	}
-    }
+   // }
 }

@@ -792,7 +792,8 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 						   0,//batch_size, not used
 						   0,
 						   0,
-						   l.c
+						   l.c,
+						   10
 						   	 );
 
 

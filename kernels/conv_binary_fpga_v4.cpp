@@ -151,7 +151,8 @@ void conv_binary_subblock_fpga_v4(
 					   int batch_size,
 					   int step_size,
 					   int out_step_size,
-					   int l_c
+					   int l_c,
+					   unsigned int total_block_count
 					  ) // Reduces the amount of output cahce memory required
 {
 	// coefficients are double buffered and read from parallel kernel
@@ -185,11 +186,9 @@ void conv_binary_subblock_fpga_v4(
 	uint16 kernel_mask_A;
 #else
 	unsigned int kernel_mask_A[STRIPES];
-	unsigned int kernel_mask_B[STRIPES];
 #endif
 #else
 	unsigned int kernel_mask_A[STRIPES];
-	unsigned int kernel_mask_B[STRIPES];
 #endif
 
 	short index_offsets[9];
@@ -302,7 +301,7 @@ void conv_binary_subblock_fpga_v4(
 			unsigned short feature_index = 0;
 
 #pragma ivdep array(out_cache)
-			while (i_f < in_f)da
+			while (i_f < in_f)
 			{
 
 				// Load coefficients in parallel using double buffer

@@ -286,12 +286,12 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
     int l_n = l.n;
     l_c = (l.c%STRIPES)?l.c + (STRIPES-(l.c%STRIPES)):l.c;
     l_n = (l.n%STRIPES)?l.n + (STRIPES-(l.n%STRIPES)):l.n;
-    l.fpga_outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, l.w*l.h*l_n* sizeof(float), NULL, &status);
+    l.fpga_outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 2*l.w*l.h*l_n* sizeof(float), NULL, &status);
     // binary size
     
-    l.fpga_coeffbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 4*l.size*l.size*l_c*l_n / STRIPES, NULL, &status);
-    l.fpga_scales_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, ln_rounded * sizeof(float), NULL, &status);
-    l.fpga_biases_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 1024 * 4 * sizeof(float), NULL, &status);
+    l.fpga_coeffbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 2*4*l.size*l.size*l_c*l_n / STRIPES, NULL, &status);
+    l.fpga_scales_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 2*ln_rounded * sizeof(float), NULL, &status);
+    l.fpga_biases_buf = clCreateBuffer(context, CL_MEM_READ_WRITE, 2*1024 * 4 * sizeof(float), NULL, &status);
     /*printf("coeff buf status = %d\n",status);
     if (l.binary)
        l.fpga_binaryscalebuf = clCreateBuffer(context, CL_MEM_READ_WRITE, l.nweights * sizeof(float), NULL, &status);
@@ -493,14 +493,18 @@ int lcount = 0;
 void forward_convolutional_layer(convolutional_layer l, network net)
 {
     int i, j;
-
-   // fill_cpu(l.outputs*l.batch, 0, l.output, 1);
+    double start = what_time_is_it_now();
+#ifndef FPGA
+    fill_cpu(l.outputs*l.batch, 0, l.output, 1);
+#endif
 #ifdef FPGA
     if (l.fpga_load || l.first)
-#endif	
+#endif
     if(l.xnor || l.binary){
     	printf("binary convolution\n");
-	if (l.first)
+#ifdef FPGA
+    	if (l.first)
+#endif
 	        binarize_weights(l.weights, l.n, l.c/l.groups*l.size*l.size, l.binary_weights);
         swap_binary(&l);
         if (l.xnor)
@@ -513,31 +517,33 @@ void forward_convolutional_layer(convolutional_layer l, network net)
 #define BINARY_NETWORK_TEST
 #endif
 #ifdef BINARY_NETWORK_TEST
-    if (l.binary)// && (l.w == 416) && (l.stride == 2) && (l.c==32) && (l.n == 64))
+    if (l.binary)// && (l.stride == 2))// && (l.c==32) && (l.n == 64))
     {
-        /*printf("fpga binary!\n");
+        printf("fpga binary!\n");
 	int c,i;
         for (c = 0; c < l.c; c++)
     	for (i = 0; i < l.w*l.w; i++)
     	{
-    		//net.input[i + (c*l.w*l.w)] = 1;//(float)c/1024.0f;
+    		//net.input[i + (c*l.w*l.w)] = ((float)rand())/RAND_MAX;//(float)c/1024.0f;
     	}
     	for (i = 0; i < l.nweights; i++)
     	{
-    		//l.weights[i] = 1;//(i&0x1)?1.0f:-1.0f;
-    	}*/
+    		//l.weights[i] = (i&0x1)?1.0f:-1.0f;
+    	}
 
     	forward_convolution_fpga_binary_v2(l,net);
-//#define TEST
 #ifdef TEST
     	unsigned int size = l.out_w*l.out_w*l.n;
     	float *temp = (float*)malloc(size*4);
 	//int i;
+    	printf("size = %d\n",size);
+    	printf("l.outputs = %d\n",l.outputs*l.batch);
+    	if (size != l.outputs*l.batch) exit(1);
     	for (i = 0; i < size; i++)
     	{
     		temp[i] = l.output[i];
-    		l.output[i] = 0;
     	}
+        fill_cpu(l.outputs*l.batch, 0, l.output, 1);
 
     	int m = l.n/l.groups;
 		int k = l.size*l.size*l.c/l.groups;
@@ -569,13 +575,14 @@ void forward_convolutional_layer(convolutional_layer l, network net)
     		a =temp[i]*1024;
     		b =l.output[i]*1024;
 
-    		if (fabs(a-b) > 64)
+    		if (fabs(a-b) > 0)
     		//if (fabs(a-b) > 32)
     		{
     			printf("fpga does not match software! %d vs %d @ %d\n",a,b,i);
 			errors++;
     		}
-		if (errors > 32) break;
+		if (errors > 32)
+			exit(1);//break;
     	}
 
 
@@ -584,6 +591,7 @@ void forward_convolutional_layer(convolutional_layer l, network net)
     else
     {
         printf("cpu binary!\n");
+        fill_cpu(l.outputs*l.batch, 0, l.output, 1);
 	    int m = l.n/l.groups;
 		int k = l.size*l.size*l.c/l.groups;
 		int n = l.out_w*l.out_h;
@@ -729,6 +737,8 @@ void forward_convolutional_layer(convolutional_layer l, network net)
 #endif
 
     if(l.binary || l.xnor) swap_binary(&l);
+    double end = what_time_is_it_now();
+    printf("convolution time  = %f\n",start-end);
 }
 
 void backward_convolutional_layer(convolutional_layer l, network net)

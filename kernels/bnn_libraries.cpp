@@ -10,7 +10,7 @@
 
 #include "bnn_libraries.h"
 
-inline int GetBit2(unsigned int val,int id)
+int GetBit2(unsigned int val,int id)
 {
 	return ((val>>id)&0x1);
 }
@@ -140,12 +140,12 @@ void CountBitsHDL16x16(short input[16],unsigned int binary_coeffs[16],int result
 }
 
 // Convert input from float to integer efficiently!
-short FloatToShort(float a,const int scale)
+short FloatToShort(float a,const short power)
 {
-	#ifdef USE_LIBS
-	return FloatToShortExp(a,10); // bits to shift not scale
-	#else
-	return (short)(a*scale);
-	#endif
+	//#ifdef USE_LIBS
+	//return FloatToShortExp(a,power); // bits to shift not scale
+	//#else
+	return (short)(a*((short)1<<power));
+	//#endif
 }
 

@@ -1,12 +1,12 @@
 GPU=0
 FPGA=1
-HARDWARE=1
+HARDWARE=0
 CUDNN=0
-OPENCV=1
-OPENMP=1
-DEBUG=0
-CYGWIN=0
-TEST=0
+OPENCV=0
+OPENMP=0
+DEBUG=1
+CYGWIN=1
+TEST=1
 
 ARCH= -gencode arch=compute_30,code=sm_30 \
       -gencode arch=compute_35,code=sm_35 \
@@ -56,12 +56,10 @@ CFLAGS+=$(OPTS)
 
 ifeq ($(OPENCV), 1) 
 COMMON+= -DOPENCV
-CFLAGS+= -DOPENCV
-## -ID:/darknet/darknet-master/opencv/build/include
+CFLAGS+= -DOPENCV -ID:/darknet/darknet-master/opencv/build/include
 #LDFLAGS+= `pkg-config --libs opencv` -LD:/darknet/darknet-master/opencv/build/x64/vc15/lib -lopencv_world340
-##LDFLAGS+=-LD:/darknet/darknet-master/opencv/build/x64/vc15/lib -lopencv_world340
-LDFLAGS+= `pkg-config --libs opencv` 
-COMMON+= `pkg-config --cflags opencv` 
+LDFLAGS+=-LD:/darknet/darknet-master/opencv/build/x64/vc15/lib -lopencv_world340
+#COMMON+= `pkg-config --cflags opencv` 
 endif
 
 ifeq ($(GPU), 1) 
@@ -92,8 +90,9 @@ COMMON+=-Ikernels/ -DFPGA
 #kernel files
 OBJ+=basic_convolution_striped.o
 OBJ+=basic_convolution_striped_reduced_mem.o
-OBJ+=conv_binary_fpga.o
-OBJ+=conv_binary_fpga_v2.o
+#OBJ+=conv_binary_fpga.o
+OBJ+=conv_binary_fpga_v9.o
+OBJ+=bnn_libraries.o
 OBJ+=leaky_activate_fpga.o
 OBJ+=max_pooling.o
 OBJ+=average_pool.o
@@ -108,6 +107,10 @@ OBJ+=opencl.o options.o
 
 ifeq ($(HARDWARE),1)
 COMMON+= -DHARDWARE
+endif
+
+ifeq ($(CYGWIN),1)
+COMMON+= -DCYGWIN
 endif
 
 # OpenCL compile and link flags.
