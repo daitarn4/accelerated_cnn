@@ -122,7 +122,8 @@ bool init(bool binary) {
 
 	std::string binary_file;
 	if (binary)
-		binary_file= getBoardBinaryFile("./kernels/bin256", device);
+		binary_file= getBoardBinaryFile("bin1024_385_v9_par4", device);
+		//binary_file= getBoardBinaryFile("./kernels/bin1024", device);
 	else
 		binary_file= getBoardBinaryFile("./device/darknet", device);
 	printf("Using AOCX File: %s\n", binary_file.c_str());
@@ -141,7 +142,7 @@ bool init(bool binary) {
 		kernel_coeff_setup = clCreateKernel(program, kernel_name, &status);
 		checkError(status, "Failed to create basic_convolution_striped_load_coeffs_kernel_binary_bits kernel");
 
-		const char *kernel_name2 = "conv_binary_subblock_fpga";// Kernel name, as defined in the CL file
+		const char *kernel_name2 = "conv_binary_subblock_fpga_v4";// Kernel name, as defined in the CL file
 		kernel_convolve = clCreateKernel(program, kernel_name2, &status);
 		checkError(status, "Failed to create basic_convolution_striped_kernel_binary kernel");
 	}
@@ -158,13 +159,13 @@ bool init(bool binary) {
 
 
 	// Initialise activation layer
-	const char *activation_kernel_name = "leaky_activate_fpga";// Kernel name, as defined in the CL file
+	const char *activation_kernel_name = "conv_activations_v4";// Kernel name, as defined in the CL file
 	kernel_activation = clCreateKernel(program, activation_kernel_name, &status);
 	checkError(status, "Failed to create leaky_activate_fpga kernel");
 
 	const char *pool_kernel_name = "hw_maxpooling_fpga_x2_striped";// Kernel name, as defined in the CL file
-	kernel_pool = clCreateKernel(program, pool_kernel_name, &status);
-	checkError(status, "Failed to create hw_maxpooling_fpga_x2_striped");
+	//kernel_pool = clCreateKernel(program, pool_kernel_name, &status);
+	//checkError(status, "Failed to create hw_maxpooling_fpga_x2_striped");
 
 	const char *shortcut_kernel_name = "shortcut_layer_fpga";// Kernel name, as defined in the CL file
 	kernel_shortcut = clCreateKernel(program, shortcut_kernel_name, &status);
@@ -175,8 +176,8 @@ bool init(bool binary) {
 	checkError(status, "Failed to create upsample_x2_fpga kernel");
 
 	const char *yolo_kernel_name = "yolo_layer_fpga";// Kernel name, as defined in the CL file
-	kernel_yolo = clCreateKernel(program, yolo_kernel_name, &status);
-	checkError(status, "Failed to create yolo_layer_fpga kernel");
+	//kernel_yolo = clCreateKernel(program, yolo_kernel_name, &status);
+	//checkError(status, "Failed to create yolo_layer_fpga kernel");
 
 	const char *route_kernel_name = "route_layer_fpga";// Kernel name, as defined in the CL file
 	kernel_route = clCreateKernel(program, route_kernel_name, &status);
@@ -192,10 +193,10 @@ extern "C" void host_setup(int binary)
 	init(binary?true:false);
 	// Setup common buffer of input and output
 	cl_int status;
-	inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 512*512*32 * sizeof(float), NULL, &status);
-	outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 512*512*64 * sizeof(float), NULL, &status);
+	inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 512*512*1024 * sizeof(float), NULL, &status);
+	outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 512*512*1024 * sizeof(float), NULL, &status);
 	coeffbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 1024*1024*9 * sizeof(float), NULL, &status);
-	scalebuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 1024 * sizeof(float), NULL, &status);
+	scalebuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 1024 * 8 *sizeof(float), NULL, &status);
 
 
 	initiailised = true;
@@ -221,7 +222,6 @@ extern "C" void forward_convolution_fpga(convolutional_layer l, network net)
 	{
 		ln_rounded += STRIPES-(l.n%STRIPES);
 	}
- //printf("l.binary = %s\n",l.binary?"TRUE":"FALSE");
 
 #ifdef HARDWARE
 	bool hardware_enabled = true;
@@ -231,18 +231,18 @@ extern "C" void forward_convolution_fpga(convolutional_layer l, network net)
 	float *new_weights=NULL;
 	float *striped_input=NULL;
 	float *striped_output=NULL;
-	//if (!hardware_enabled || (l.first == 1))
+	if (!hardware_enabled || (l.first == 1))
 	{
 		new_weights = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*ln_rounded*l.size*l.size*sizeof(float)*2);
 		stripe_coefficients(l.c,l.n,l.size,l.weights,new_weights);
 	}
-	//if (!hardware_enabled || (l.fpga_load ==1))
+	if (!hardware_enabled || (l.fpga_load ==1))
 	{
 		striped_input = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
 		stripe_input_data(l.c,l.w*l.w,net.input,striped_input);
 		total_kernel_time = 0.0f;
 	}
-	//if (!hardware_enabled || (l.fpga_save == 1))
+	if (!hardware_enabled || (l.fpga_save == 1))
 	{
 		striped_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
 	}
@@ -255,31 +255,17 @@ extern "C" void forward_convolution_fpga(convolutional_layer l, network net)
 
 
 	float InputBatchSize = (((float)(input_features*l.w*l.w))/STRIPES);
-	printf("InputBatchSize = %f\n",InputBatchSize);
 	while (InputBatchSize > (float)(MAX_INPUT_IMAGE_BATCH))
 	{
 		InputBatchSize = InputBatchSize / 2.0f;
-		printf("InputBatchSize = %f\n",InputBatchSize);
 		y_div = y_div*2;
 	}
-	/*int out_size_y_inc;
-	int in_size_y_inc;
-	out_size_y_inc = l.out_w/y_div;
-	in_size_y_inc = out_size_y_inc*l.stride;
-	y_div = l.w/in_size_y_inc;
-	y_div += (l.w%in_size_y_inc)?1:0;*/
-	printf("y_div = %d\n",y_div);
 
 
 	unsigned int chunk_size = MAX_BATCH_SIZE; // number of pixels
-
-
 	float batches_of_169 = InputBatchSize/(MAX_BATCH_SIZE*l.stride*l.stride);
 	batches_of_169 = ((l.out_w/y_div)*l.out_w)/MAX_BATCH_SIZE;
 	int no_chunks = 1;//
-	printf("Batches of 169 = %f\n", batches_of_169);
-	printf(" inputs = %d, buffered_size = %d\n",l.w*l.w,y_div*MAX_BATCH_SIZE);
-	//printf("in = %d:out = %d\n",l.fpga_load,l.fpga_save);
 	if (hardware_enabled)
 	{
 		HardwareRunConvolution(striped_input,//net.input,
@@ -290,8 +276,6 @@ extern "C" void forward_convolution_fpga(convolutional_layer l, network net)
 	}
 	else
 	{
-
-
 
 		// Coefficient kernel ran on host
 		basic_convolution_striped_load_coeffs_kernel_reduced_mem(
@@ -381,13 +365,14 @@ extern "C" void stripe_coefficients_binary(int in_f,int out_f, int kernel_size,f
 	int i,j,k,q,p;
 
 	int scale_count = 0;
+	float scaler = 1<<BINARY_FLOAT_SCALE;
 	for (i = 0; i < out_f; i+= STRIPES)
 	{
 		for ( q = 0; q < STRIPES; q++)
 		{
 			float val =in[(q+i)*in_f*size];
 			if (val < 0) val=-val;
-			scale[scale_count++] = val/BINARY_FLOAT_SCALE;
+			scale[scale_count++] = val/scaler;
 		}
 		for ( j = 0; j < in_f; j+= STRIPES)
 		{
@@ -417,135 +402,6 @@ extern "C" void stripe_coefficients_binary(int in_f,int out_f, int kernel_size,f
 	}
 }
 
-#ifdef OLD
-extern "C" void forward_convolution_fpga_binary(convolutional_layer l, network net)
-{
-	printf("forward_convolution_fpga_binary\n");
-	int ln_rounded = l.n;
-	if (l.n%STRIPES)
-	{
-		ln_rounded += STRIPES-(l.n%STRIPES);
-	}
-
-	float *new_weights = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*ln_rounded*l.size*l.size*sizeof(float)*2);
-	unsigned int *new_weights_binary = (unsigned int*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*ln_rounded*l.size*l.size*sizeof(unsigned int)*2);
-	float *striped_input = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
-	float *striped_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
-	float *binary_scale = (float*)alignedMalloc(l.n*sizeof(float)*64);
-
-#ifdef HARDWARE
-	bool hardware_enabled = true;
-#else
-	bool hardware_enabled = false;
-#endif
-
-	stripe_coefficients_binary(l.c,l.n,l.size,l.weights,new_weights_binary,binary_scale);
-	stripe_coefficients(l.c,l.n,l.size,l.weights,new_weights);
-	stripe_input_data(l.c,l.w*l.w,net.input,striped_input);
-	int l_c_orig = l.c;
-	if (l.c < STRIPES)
-		l.c = STRIPES;
-	// RunOnHardware
-	int y_div = 1;
-	unsigned int InputBatchSize = (l.c*l.w*l.w)/STRIPES;
-	while (InputBatchSize > MAX_INPUT_IMAGE_BATCH)
-	{
-		InputBatchSize = InputBatchSize / 2.0f;
-		y_div = y_div*2;
-	}
-	printf("y_div = %d\n",y_div);
-	unsigned int chunk_size = MAX_BATCH_SIZE; // number of pixels
-	float batches_of_169 = InputBatchSize/(MAX_BATCH_SIZE*l.stride*l.stride);
-	batches_of_169 = ((l.out_w/y_div)*l.out_w)/MAX_BATCH_SIZE;
-	int no_chunks = 1;//
-	printf("Batches of 169 = %f\n", batches_of_169);
-	printf(" inputs = %d, buffered_size = %d\n",l.w*l.w,y_div*MAX_BATCH_SIZE);
-
-	if (hardware_enabled)
-	{
-		HardwareRunConvolutionBinary(
-		  striped_input,//net.input,
-		   new_weights_binary, striped_output, binary_scale,
-		   l.batch,
-		   l.groups,
-		   l.nweights,
-		   l.w,
-		   l.out_w,
-		   l.size,
-		   l.pad,
-		   l.c,
-		   l_c_orig,
-		   ln_rounded,
-		   l.stride,
-		   ((l.out_w*l.out_w)/MAX_BATCH_SIZE)/y_div,
-		   y_div);
-	}
-	else
-	{
-		// Coefficient kernel ran on host
-		/*basic_convolution_striped_load_coeffs_kernel_binary(
-						   new_weights,
-						   l.batch,
-						   l.groups,
-						   l.nweights,
-						   l.w,
-						   l.out_w,
-						   l.size,
-						   l.pad,
-						   l.c,
-						   ln_rounded,
-						   l.stride,
-						   ((l.out_w*l.out_w)/MAX_BATCH_SIZE)/y_div,
-						   y_div
-						   );
-						   //input_batch);*/
-
-		basic_convolution_striped_load_coeffs_kernel_binary_bits(
-						   new_weights_binary,
-						   l.batch,
-						   l.groups,
-						   l.nweights,
-						   l.w,
-						   l.out_w,
-						   l.size,
-						   l.pad,
-						   l.c,
-						   ln_rounded,
-						   l.stride,
-						   ((l.out_w*l.out_w)/MAX_BATCH_SIZE)/y_div,
-						   y_div
-						   );
-						   //input_batch);
-
-		basic_convolution_striped_kernel_binary(striped_input,//net.input,
-						   binary_scale, striped_output,
-						   l.batch,
-						   l.groups,
-						   l.nweights,
-						   l.w,
-						   l.out_w,
-						   l.w/y_div,
-						   l.out_w/y_div,
-						   l.size,
-						   l.pad,
-						   l.c,
-						   l_c_orig,
-						   ln_rounded,
-						   l.stride,
-						  ((l.out_w*l.out_w)/MAX_BATCH_SIZE)/y_div,
-						  y_div);
-						  //input_batch);// Input subdivisions
-	}
-
-	remove_stripes(l.n,(l.out_w*l.out_w),striped_output,l.output);
-	//clear_channel();
-	alignedFree(new_weights);
-	alignedFree(striped_input);
-	alignedFree(striped_output);
-	alignedFree(binary_scale);
-
-}
-#endif
 
 
 extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, network net)
@@ -573,19 +429,22 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 		binary_scale = (float*)alignedMalloc(32*ln_rounded*sizeof(float));
 		new_weights = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*ln_rounded*l.size*l.size*sizeof(float)*2);
 		stripe_coefficients_binary(l.c,l.n,l.size,l.weights,new_weights_binary,binary_scale);
-
 		stripe_coefficients(l.c,l.n,l.size,l.weights,new_weights);
 	}
 	if (!hardware_enabled || (l.fpga_load == 1))
 	{
-		striped_input = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
-		stripe_input_data(l.c,l.w*l.w,net.input,striped_input);
+		if (l.first == 1)
+			net.layers[l.id].aligned_input = (float*)alignedMalloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
+		stripe_input_data(l.c,l.w*l.w,net.input,net.layers[l.id].aligned_input);
 		total_kernel_time = 0.0f;
 	}
 	if (!hardware_enabled || (l.fpga_save == 1))
 	{
-		striped_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
-		printf("Striped output size = %d\n",l.out_w*l.out_w*ln_rounded);
+		if (l.first)
+		{
+			net.layers[l.id].aligned_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
+			printf("Striped output size = %d\n",l.out_w*l.out_w*ln_rounded);
+		}
 	}
 	int input_features = l.c;
 	if (input_features < STRIPES)
@@ -599,7 +458,7 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 	int InputBatchSize = f_groups*(l.w + l.size -1)*(l.w + l.size -1);
 	int divx = 1,divy=1;
 
-	while (InputBatchSize > (float)(MAX_INPUT_IMAGE_BATCH))
+	while (InputBatchSize > (float)(MAX_OUTPUT_IMAGE_BATCH))
 	{
 		if (((l.w&0x1)==0))
 		if (((l.w/(divx*2))&0x1) == 0) // Cannot divide non power of two in x
@@ -607,7 +466,7 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 			divx *= 2;
 			InputBatchSize = f_groups*((l.w/divx) + l.size -1)*((l.w/divy) + l.size -1);
 		}
-		if (InputBatchSize > (float)(MAX_INPUT_IMAGE_BATCH))
+		if (InputBatchSize > (float)(MAX_OUTPUT_IMAGE_BATCH))
 		{
 			divy *= 2;
 			InputBatchSize = f_groups*((l.w/divx) + l.size -1)*((l.w/divy) + l.size -1);
@@ -636,8 +495,9 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 
 	if (hardware_enabled)
 	{
-		HardwareRunConvolutionBinary(striped_input,//net.input,
-		   new_weights_binary, striped_output,binary_scale,
+		// Run on hardware
+		HardwareRunConvolutionBinary(net.layers[l.id].aligned_input,
+		   new_weights_binary, net.layers[l.id].aligned_output,binary_scale,
 		   ln_rounded,
 		   l,
 		   sub_block_size_x,
@@ -650,98 +510,8 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 	}
 	else
 	{
-		// while
-
-
-
-
-		printf("divx = %d\n",divx);
-		printf("divy = %d\n",divy);
-		printf("sub_block_size_x = %d\n",sub_block_size_x);
-		printf("sub_block_size_y = %d\n",sub_block_size_y);
-		printf("stride = %d\n",l.stride);
-
-		conv_coeffs_binary_subblock_fpga(
-						   new_weights_binary,//new_weights,
-						   l.batch,
-						   l.groups,
-						   l.nweights,
-						   l.w,
-						   l.out_w,
-						   l.size,
-						   l.pad,
-						   input_features,
-						   ln_rounded,
-						   l.stride,
-						   1,//batches_of_169,
-						   no_sub_blocks,
-						   (input_features*l.size*l.size)
-						   );
-
-
-
-
-#ifdef V3
-		float div_sqrt_variance[2048];
-
-		if (l.batch_normalize)
-		for (int i = 0; i < l.out_c; i++)
-		{
-			div_sqrt_variance[i] = 1.0f/(sqrt(l.rolling_variance[i]) + .000001f);
-		}
-		float activation_data[1024*4];
-		for (int i = 0; i < l.out_c; i++) activation_data[i] = div_sqrt_variance[i];
-		if ( l.batch_normalize)
-		{
-			for (int i = 0; i < l.out_c; i++) activation_data[i+ln_rounded] = l.rolling_mean[i];
-			for (int i = 0; i < l.out_c; i++) activation_data[i+ln_rounded*2] = l.scales[i];
-		}
-		for (int i = 0; i < l.out_c; i++) activation_data[i+ln_rounded*3] = l.biases[i];
-
-
-		//leaky_activate_fpga (striped_output, striped_output, l.batch,l.out_c,l.out_h*l.out_w,
-		//		activation_data,//div_sqrt_variance,
-		//						//  l.rolling_mean,
-		//						//  l.scales,
-		//						//  l.biases,
-		//						  l.batch_normalize?1:0,
-		//						((l.activation == LEAKY)||(l.activation == BINARY))? FPGA_LEAKY:FPGA_LINEAR);
-		int activation = ((l.activation == LEAKY)|| (l.activation == BINARY))?FPGA_LEAKY:FPGA_LINEAR;
-
-		conv_binary_subblock_fpga_v3(striped_input,//net.input,
-						   new_weights_binary, striped_output,
-
-						   divy,
-						   divx,
-						   sub_block_size_x,
-						   sub_block_size_y,
-
-						   l.batch,
-						   l.groups,
-						   l.nweights,
-						   l.w,
-						   l.out_w,
-						   l.size,
-						   l.pad,
-						   l.c,
-						   ln_rounded,
-						   l.stride,
-						   0, // Not used
-						   0,
-						   binary_scale,
-						   0,//batch_size, not used
-						   0,
-						   0,
-						   l.c,
-						   activation_data,
-						   l.batch_normalize,
-						   activation
-						   	 );
-
-#endif
-
-#ifdef V4
-
+		// If no hardware enable run software model.
+		// This is used only for debugging the FPGA implementation.
 		float div_sqrt_variance[2048];
 
 		if (l.batch_normalize)
@@ -759,18 +529,44 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 		for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)+3] = l.biases[i];
 
 
-		//leaky_activate_fpga (striped_output, striped_output, l.batch,l.out_c,l.out_h*l.out_w,
-		//		activation_data,//div_sqrt_variance,
-		//						//  l.rolling_mean,
-		//						//  l.scales,
-		//						//  l.biases,
-		//						  l.batch_normalize?1:0,
-		//						((l.activation == LEAKY)||(l.activation == BINARY))? FPGA_LEAKY:FPGA_LINEAR);
 		int activation = ((l.activation == LEAKY)|| (l.activation == BINARY))?FPGA_LEAKY:FPGA_LINEAR;
 
-		conv_binary_subblock_fpga_v4(striped_input,//net.input,
-						   new_weights_binary, striped_output,
 
+		conv_coeffs_binary_subblock_fpga(
+						   (vec_uint*)new_weights_binary,
+						   l.batch,
+						   l.groups,
+						   l.nweights,
+						   l.w,
+						   l.out_w,
+						   l.size,
+						   l.pad,
+						   input_features,
+						   ln_rounded,
+						   l.stride,
+						   1,//batches_of_169,
+						   no_sub_blocks,
+						   (input_features*l.size*l.size)
+						   );
+
+		unsigned char stride_shift = ((l.stride==2)?1:0);
+		unsigned short block_size = (sub_block_size_x>>stride_shift) * ( sub_block_size_y>>stride_shift);
+		unsigned short input_block_size = sub_block_size_x*sub_block_size_y;
+		short o_f = 0;
+
+		unsigned short feature_offset = 0;
+		unsigned short block_count = 0;
+		unsigned short filter_blocks = l.c>>STRIPES_DIV;
+		filter_blocks = filter_blocks == 0 ? 1 : filter_blocks;
+
+		// block_size is divided by PAR pix
+		unsigned int block_size_modified = block_size/PAR_PIX + ((block_size&PAR_PIX_MASK)?1:0);
+
+		unsigned int total_block_count = filter_blocks*l.size*l.size*(ln_rounded>>STRIPES_DIV)*block_size_modified;
+
+
+		conv_binary_subblock_fpga_v4((vec_float*)net.layers[l.id].aligned_input,//net.input,
+						   new_weights_binary, net.layers[l.id].aligned_output,
 						   divy,
 						   divx,
 						   sub_block_size_x,
@@ -793,11 +589,10 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 						   0,
 						   0,
 						   l.c,
-						   10
-						   	 );
+						   total_block_count,
+						   BINARY_FLOAT_SCALE);
 
-
-		conv_activations_v4(striped_output,//net.input,
+		conv_activations_v4(net.layers[l.id].aligned_output,//net.input,
 						   divy,
 						   divx,
 						   sub_block_size_x,
@@ -824,29 +619,18 @@ extern "C" void forward_convolution_fpga_binary_v2(convolutional_layer l, networ
 						   l.batch_normalize,
 						   activation
 						   	 );
-#endif
-						  //input_batch);// Input subdivisions
-		/*leaky_activate_fpga (striped_output, striped_output, l.batch,l.out_c,l.out_h*l.out_w,
-				activation_data,//div_sqrt_variance,
-								//  l.rolling_mean,
-								//  l.scales,
-								//  l.biases,
-								  l.batch_normalize?1:0,
-								((l.activation == LEAKY)||(l.activation == BINARY))? FPGA_LEAKY:FPGA_LINEAR);*/
-
-
 	}
 	
-	if (!hardware_enabled || (l.fpga_save ==1))
+	if (!hardware_enabled || (l.fpga_save == 1))
 	{
 		// Save results
-		remove_stripes(ln_rounded,(l.out_w*l.out_w),striped_output,l.output);
+		remove_stripes(ln_rounded,(l.out_w*l.out_w),net.layers[l.id].aligned_output ,l.output);
 		alignedFree(striped_output);
 	}
 	if (!hardware_enabled || (l.fpga_load ==1))
 	{
 		//clear_channel();
-		alignedFree(striped_input);
+		//alignedFree(striped_input);
 	}
 	//
 	if (!hardware_enabled || (l.first == 1)) // First pass
@@ -888,16 +672,14 @@ extern "C" void forward_upsample_layer_fpga(const layer l, network net)
 	clSetKernelArg(kernel_upsample, 7, sizeof(int), &insize);
 	clSetKernelArg(kernel_upsample, 8, sizeof(int), &size);
 	
-	cl_event kernel_event;
 	cl_int status;
-	status = clEnqueueNDRangeKernel(queue_coeff, kernel_upsample, 1, NULL, gSize, wgSize, 0, NULL, &kernel_event);
+	status = clEnqueueNDRangeKernel(queue_activation, kernel_upsample, 1, NULL, gSize, wgSize, 0, NULL, NULL);
 	checkError(status, "Failed to launch kernel");
-	status = clFinish(queue_coeff);
-
 	if (!hardware_enabled || (l.fpga_save ==1))
 	{
+		status = clFinish(queue_activation);
 		float *striped_output = (float*)malloc((l.c < STRIPES?STRIPES:l.c)*l.out_w*l.out_w*sizeof(float));
-		clEnqueueReadBuffer(queue_coeff, out_mem, CL_TRUE, 0, sizeof(float) *size * l.c , striped_output, 0, NULL, NULL);
+		clEnqueueReadBuffer(queue_activation, out_mem, CL_TRUE, 0, sizeof(float) *size * l.c , striped_output, 0, NULL, NULL);
 		remove_stripes((l.c < STRIPES?STRIPES:l.c),(l.out_w*l.out_w),striped_output,l.output);
 	}
 
@@ -933,96 +715,95 @@ extern "C" void forward_shortcut_layer_fpga(const route_layer l, network net)
 #else
 	bool hardware_enabled = false;
 #endif
-	printf("fpga short cut\n");
+	float *striped_input=NULL;
+	float *striped_input_add=NULL;
+	float *striped_output=NULL;
+	float *unstriped_fpga=NULL;
+	int ln_rounded = l.out_c;
+	if (l.out_c%STRIPES)
 	{
-		float *striped_input=NULL;
-		float *striped_input_add=NULL;
-		float *striped_output=NULL;
-		float *unstriped_fpga=NULL;
-		int ln_rounded = l.out_c;
-		if (l.out_c%STRIPES)
-		{
-			ln_rounded += STRIPES-(l.out_c%STRIPES);
-		}
-		int i;
-		if (!hardware_enabled || l.fpga_load)
-		{
-			printf("upload short cut data\n");
-			striped_input_add = (float*)malloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
-			striped_input = (float*)malloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
-		}
-		if (!hardware_enabled || l.fpga_save)
-		{
-			striped_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
-		}
-		if (!hardware_enabled || l.fpga_load == 1)
-		{
-			stripe_input_data(l.c,l.w*l.w, net.layers[l.index].output,striped_input_add);
-			stripe_input_data(l.c,l.w*l.w, net.input,striped_input);
-			//clEnqueueWriteBuffer(queue_coeff, inbuf, CL_TRUE, 0, sizeof(float) * (l.c < STRIPES?STRIPES:l.c)*l.w*l.w, striped_input, 0, NULL, NULL);			
-		}
-
-
-
-		if (hardware_enabled)
-		{
-			//if (!hardware_enabled || l.fpga_load == 1)
-			//if (!hardware_enabled || l.fpga_load == 1)
-
-			int input_block_size = l.batch*l.w*l.h*l.c;
-			int output_size = l.out_h*l.out_w;
-			cl_mem in_mem = net.layers[l.id-1].fpga_outbuf;// Use previous layer output buffer.
-			cl_mem mem = net.layers[l.index].fpga_outbuf;
-			printf("mem = %x\n",mem);
-			printf("l.fpga_outbuf = %x\n",l.fpga_outbuf);
-			// Get buffer of previous generated convolution output
-			clSetKernelArg(kernel_shortcut, 0, sizeof(int), &input_block_size);
-			clSetKernelArg(kernel_shortcut, 1, sizeof(int), &l.batch);
-			clSetKernelArg(kernel_shortcut, 2, sizeof(int), &l.w);
-			clSetKernelArg(kernel_shortcut, 3, sizeof(int), &l.h);
-			clSetKernelArg(kernel_shortcut, 4, sizeof(int), &l.c);
-			clSetKernelArg(kernel_shortcut, 5, sizeof(cl_mem), &mem); // Points to layer to append
-			clSetKernelArg(kernel_shortcut, 6, sizeof(int), &l.out_w);
-			clSetKernelArg(kernel_shortcut, 7, sizeof(int), &l.out_h);
-			clSetKernelArg(kernel_shortcut, 8, sizeof(int), &l.out_c);
-			clSetKernelArg(kernel_shortcut, 9, sizeof(float), &l.alpha);
-			clSetKernelArg(kernel_shortcut, 10, sizeof(float), &l.beta);
-			clSetKernelArg(kernel_shortcut, 11, sizeof(cl_mem), &in_mem);
-			clSetKernelArg(kernel_shortcut, 12, sizeof(cl_mem), &l.fpga_outbuf);
-			clSetKernelArg(kernel_shortcut, 13, sizeof(cl_mem), &l.fpga_outbuf);
-
-
-
-			cl_event kernel_event;
-			cl_int status;
-			//printf("Max pool launch kernel\n");
-			status = clEnqueueNDRangeKernel(queue_coeff, kernel_shortcut, 1, NULL, gSize, wgSize, 0, NULL, &kernel_event);
-			checkError(status, "Failed to launch kernel");
-			status = clFinish(queue_coeff);
-			if (!hardware_enabled || l.fpga_save == 1)
-				clEnqueueReadBuffer(queue_coeff, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * (l.c < STRIPES?STRIPES:l.c)*l.out_w*l.out_w, striped_output, 0, NULL, NULL);
-
-		}
-		else
-		{
-			shortcut_layer_fpga(l.batch*l.w*l.h*l.c, l.batch, l.w, l.h, l.c, striped_input_add, l.out_w, l.out_h, l.out_c,  l.alpha, l.beta, striped_input,striped_output, striped_output);
-		}
-		if (!hardware_enabled || l.fpga_save == 1)
-			remove_stripes(ln_rounded,(l.out_w*l.out_w),striped_output,l.output);
-
-		// Linear activation, do nothing!
-		if (!(l.activation == LINEAR))
-		{
-			printf("Warning non linear activation not supported: %s:%d\n",__FILE__,__LINE__);
-			exit(1);
-		}
-		if (!hardware_enabled || l.fpga_save == 1)
-		{
-			alignedFree(striped_input);	alignedFree(striped_input_add);
-			alignedFree(striped_output);
-		}
+		ln_rounded += STRIPES-(l.out_c%STRIPES);
 	}
-	printf("end shortcut layer\n");
+	int i;
+	if (!hardware_enabled || l.fpga_load==1)
+	{
+		printf("upload short cut data\n");
+		striped_input_add = (float*)malloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
+		striped_input = (float*)malloc((l.c < STRIPES?STRIPES:l.c)*l.w*l.w*sizeof(float)*2);
+	}
+	if (!hardware_enabled || l.fpga_save)
+	{
+		striped_output = (float*)alignedMalloc((ln_rounded)*l.out_w*l.out_w*sizeof(float)*2);
+
+	}
+	if (!hardware_enabled || l.fpga_load == 1)
+	{
+		stripe_input_data(l.c,l.w*l.w, net.layers[l.index].output,striped_input_add);
+		stripe_input_data(l.c,l.w*l.w, net.input,striped_input);
+		//clEnqueueWriteBuffer(queue_coeff, inbuf, CL_TRUE, 0, sizeof(float) * (l.c < STRIPES?STRIPES:l.c)*l.w*l.w, striped_input, 0, NULL, NULL);
+	}
+
+
+
+	if (hardware_enabled)
+	{
+		//if (!hardware_enabled || l.fpga_load == 1)
+		//if (!hardware_enabled || l.fpga_load == 1)
+
+		int input_block_size = l.batch*l.w*l.h*l.c;
+		int output_size = l.out_h*l.out_w;
+		cl_mem in_mem = net.layers[l.id-1].fpga_outbuf;// Use previous layer output buffer.
+		cl_mem mem = net.layers[l.index].fpga_outbuf;
+		// Get buffer of previous generated convolution output
+		clSetKernelArg(kernel_shortcut, 0, sizeof(int), &input_block_size);
+		clSetKernelArg(kernel_shortcut, 1, sizeof(int), &l.batch);
+		clSetKernelArg(kernel_shortcut, 2, sizeof(int), &l.w);
+		clSetKernelArg(kernel_shortcut, 3, sizeof(int), &l.h);
+		clSetKernelArg(kernel_shortcut, 4, sizeof(int), &l.c);
+		clSetKernelArg(kernel_shortcut, 5, sizeof(cl_mem), &mem); // Points to layer to append
+		clSetKernelArg(kernel_shortcut, 6, sizeof(int), &l.out_w);
+		clSetKernelArg(kernel_shortcut, 7, sizeof(int), &l.out_h);
+		clSetKernelArg(kernel_shortcut, 8, sizeof(int), &l.out_c);
+		clSetKernelArg(kernel_shortcut, 9, sizeof(float), &l.alpha);
+		clSetKernelArg(kernel_shortcut, 10, sizeof(float), &l.beta);
+		clSetKernelArg(kernel_shortcut, 11, sizeof(cl_mem), &in_mem);
+		clSetKernelArg(kernel_shortcut, 12, sizeof(cl_mem), &l.fpga_outbuf);
+		clSetKernelArg(kernel_shortcut, 13, sizeof(cl_mem), &l.fpga_outbuf);
+
+
+
+		cl_int status;
+		//printf("Max pool launch kernel\n");
+		status = clEnqueueNDRangeKernel(queue_activation, kernel_shortcut, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+		checkError(status, "Failed to launch kernel");
+		if (!hardware_enabled || l.fpga_save == 1)
+		{
+			status = clFinish(queue_activation);
+			clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * (l.c < STRIPES?STRIPES:l.c)*l.out_w*l.out_w, striped_output, 0, NULL, NULL);
+
+		}
+
+	}
+	else
+	{
+		shortcut_layer_fpga(l.batch*l.w*l.h*l.c, l.batch, l.w, l.h, l.c, striped_input_add, l.out_w, l.out_h, l.out_c,  l.alpha, l.beta, striped_input,striped_output, striped_output);
+	}
+	if (!hardware_enabled || l.fpga_save == 1)
+		remove_stripes(ln_rounded,(l.out_w*l.out_w),striped_output,l.output);
+
+	// Linear activation, do nothing!
+	if (!(l.activation == LINEAR))
+	{
+		printf("Warning non linear activation not supported: %s:%d\n",__FILE__,__LINE__);
+		exit(1);
+	}
+	if (!hardware_enabled || l.fpga_save == 1)
+	{
+
+//			alignedFree(striped_input);	alignedFree(striped_input_add);
+//			alignedFree(striped_output);
+	}
+
 }
 
 
@@ -1110,92 +891,6 @@ void SetBit(int layer,unsigned int *bits)
 }
 
 
-extern "C" void forward_yolo_layer_fpga(const maxpool_layer l, network net)
-{
-
-#ifdef HARDWARE
-	bool hardware_enabled = false;
-#else
-	bool hardware_enabled = false;
-#endif
-
-	if (hardware_enabled)
-	{
-	}
-	else
-	{
-		printf("FPGA yolo layer2!\n");
-		// Calculate layer mask
-		int mask_width = l.c/8;
-		unsigned int *layer_mask = (unsigned int *)malloc(mask_width); // bit mask
-		for (int i = 0; i < mask_width/4; i++)
-			layer_mask[i] = 0x0;
-		{
-			int n;
-			for(n = 0; n < l.n; ++n){
-				unsigned int start = ((n*(4+l.classes+1))+0);
-				for (int s = start; s < (start+2); s++)
-					SetBit(s,layer_mask);
-				start = ((n*(4+l.classes+1))+4);
-				for (int s = start; s < (start+l.classes+1); s++)
-					SetBit(s,layer_mask);
-			}
-		}
-		int c = l.c;
-		if (c < STRIPES) c = STRIPES;
-		if (c%STRIPES)
-			c +=  (STRIPES-(c%STRIPES));
-		float *striped_input = (float*)malloc(c*l.w*l.w*sizeof(float));
-		float *striped_output = (float*)malloc(c*l.out_w*l.out_w*sizeof(float));
-		stripe_input_data(l.c,l.w*l.w,net.input,striped_input);
-		cl_mem in_mem = net.layers[l.id-1].fpga_outbuf;
-		printf("yolo in_mem = %x\n",in_mem);
-		printf("yolo out_mem = %x\n",l.fpga_outbuf);
-		printf("yolo.c = %d\n",c);
-		//if (l.fpga_load==1 || (l.first == 1))
-			clEnqueueWriteBuffer(queue_activation, l.fpga_coeffbuf, CL_TRUE, 0, sizeof(int) * mask_width, layer_mask, 0, NULL, NULL);
-		//if (l.fpga_load==1)
-			clEnqueueWriteBuffer(queue_activation, in_mem, CL_TRUE, 0, sizeof(float) * c*l.w*l.h, striped_input, 0, NULL, NULL);
-
-		//Set arguements
-		clSetKernelArg(kernel_yolo, 0, sizeof(cl_mem), &l.fpga_coeffbuf); // mask!
-		clSetKernelArg(kernel_yolo, 1, sizeof(cl_mem), &in_mem);
-		clSetKernelArg(kernel_yolo, 2, sizeof(cl_mem), &l.fpga_outbuf);
-		clSetKernelArg(kernel_yolo, 3, sizeof(cl_mem), &l.fpga_outbuf);
-		clSetKernelArg(kernel_yolo, 4, sizeof(int), &l.outputs);
-		clSetKernelArg(kernel_yolo, 5, sizeof(short), &l.batch);
-		clSetKernelArg(kernel_yolo, 6, sizeof(short), &l.n);
-		clSetKernelArg(kernel_yolo, 7, sizeof(short), &l.classes);
-		clSetKernelArg(kernel_yolo, 8, sizeof(short), &l.w);
-		clSetKernelArg(kernel_yolo, 9, sizeof(short), &l.h);
-		clSetKernelArg(kernel_yolo, 10, sizeof(short), &c);
-		cl_int status;
-
-		//status = clEnqueueNDRangeKernel(queue_activation,kernel_yolo, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-  		checkError(status, "Failed to launch kernel");
-		status = clFinish(queue_activation);
-
-		// Reading output
-		//if (l.fpga_save==1)
-		clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * c*l.w*l.h, striped_output, 0, NULL, NULL);
-	
-		remove_stripes(c,(l.w*l.h),striped_output,l.output);
-		free(striped_input);
-		free(striped_output);
-		free(layer_mask);
-	}
-	/*if (!hardware_enabled || l.fpga_load)
-		alignedFree(striped_input);
-
-	if (!hardware_enabled || l.fpga_save == 1)
-	{
-		remove_stripes(l.c,(l.out_w*l.out_w),striped_output,l.output);
-		//clear_channel();
-		alignedFree(striped_output);
-	}*/
-
-}
-
 
 extern "C" void forward_avgpool_layer_fpga(const maxpool_layer l, network net)
 {
@@ -1211,64 +906,19 @@ extern "C" void forward_avgpool_layer_fpga(const maxpool_layer l, network net)
     								   l.h*l.w,
     								   1.0f/(l.w*l.w));
 
-	//clear_channel();
 	alignedFree(striped_input);
-
-
-
 }
 
 
 
 extern "C" void activate_array_fpga(float* x, const int n, const ACTIVATION a)
 {
-	printf("activation\n");
-	// data
-	/*cl_int status;
-   	int i;
-   	unsigned int work_group_size = 1;
-   	if (!initiailised)
-   	{
-   		//host_setup();
-   	}
-	// code
-	if (a == LEAKY)
-	{
-		// Call the FPGA kernel
-		fprintf(stdout, "\n\n*** [FPGA] Launching the kernel...\n\n");
-  		// Configure work set over which the kernel will execute
-  		size_t wgSize[3] = {work_group_size, 1, 1};
-  		size_t gSize[3] = {work_group_size, 1, 1};
-  		// Create input variables to pass input-output data with the kernel
-		// Write input to the kernel
-		clEnqueueWriteBuffer(queue_activation, inbuf_activation, CL_TRUE, 0, sizeof(float) * n, x, 0, NULL, NULL);
-		//Set arguements
-		clSetKernelArg(kernel_activation, 0, sizeof(cl_mem), &inbuf_activation);
-		clSetKernelArg(kernel_activation, 1, sizeof(cl_mem), &outbuf_activation);
-		clSetKernelArg(kernel_activation, 2, sizeof(int), (void*)&n);
-		// Launch the kernel
-  		status = clEnqueueNDRangeKernel(queue_activation, kernel_activation, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-  		checkError(status, "Failed to launch kernel");
-		// Reading output
-		clEnqueueReadBuffer(queue_activation, outbuf_activation, CL_TRUE, 0, sizeof(float) * n, x, 0, NULL, NULL);
-		// Completed
-		status = clFinish(queue_activation);
-		checkError(status, "Failed to finish");
-		fprintf(stdout, "\n\n*** [FPGA] Kernel execution completed\n\n");
-	}
-	else*/
-	{
-		// perform the activation using host code
-		int i;
-    		for(i = 0; i < n; ++i)
-		{
-        		//x[i] = activate(x[i], a);
-    		}
-	}
+	// Activation layer is now combined into fpga convolution layer
 }
 
 
 
+// Floating point version. Obsolete.
 extern "C" void HardwareRunConvolution(
 		float *input, float *coeffs, float *output,
 		int ln_rounded,
@@ -1296,7 +946,7 @@ extern "C" void HardwareRunConvolution(
 		clEnqueueWriteBuffer(queue_coeff, l.fpga_coeffbuf, CL_TRUE, 0, sizeof(float) * l.size*l.size*input_features*l.n, coeffs, 0, NULL, NULL);
 	
 	if (l.fpga_load == 1)
-		clEnqueueWriteBuffer(queue_convolve, inbuf, CL_TRUE, 0, sizeof(float) * l.w*l.w*input_features, input, 0, NULL, NULL);
+		clEnqueueWriteBuffer(queue_convolve, inbuf, CL_FALSE, 0, sizeof(float) * l.w*l.w*input_features, input, 0, NULL, NULL);
       
 	int i,j;
 	//Set arguements
@@ -1329,6 +979,7 @@ extern "C" void HardwareRunConvolution(
 	clSetKernelArg(kernel_convolve, 12, sizeof(int), &l.stride);
 	clSetKernelArg(kernel_convolve, 13, sizeof(int), &batches_of_49);
 	clSetKernelArg(kernel_convolve, 14, sizeof(int), &y_div);
+
 
 	cl_event kernel_event;
 	status = clEnqueueNDRangeKernel(queue_convolve, kernel_convolve, 1, NULL, gSize, wgSize, 0, NULL, NULL);
@@ -1388,25 +1039,10 @@ extern "C" void HardwareRunConvolution(
 	if (l.fpga_save)
 	{
 		clEnqueueReadBuffer(queue_activation, inbuf, CL_TRUE, 0, sizeof(float) * l.out_w*l.out_w*ln_rounded, output, 0, NULL, NULL);
-	printf("total time = %f secs\n",total_kernel_time*1e-9);
+		printf("saving convolution\n");
 	}
 	checkError(status, "Failed to launch kernel");
 	l.first = 0;
-
-/*
-	leaky_activate_fpga (output, output, l.batch,ln_rounded,l.out_h*l.out_w,
-							  div_sqrt_variance,
-							  l.rolling_mean,
-							  l.scales,
-							  l.biases,
-							  l.batch_normalize?1:0);
-	for (int i = 0; i <l.out_w*l.out_w*ln_rounded ;i++)
-		if (temp_results[i] != output[i])
-		{
-			printf("MisMatch\n");
-		}
-
-	delete temp_results;*/
 
 	return;
 }
@@ -1428,33 +1064,17 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 		input_features = STRIPES;
 
 	// Write input to kernel global memory
-
+	int feature_size_out = l.out_w*l.out_w;
 	cl_mem in_mem;
 	if (l.fpga_load)
 	{
 		in_mem = inbuf;
 		clEnqueueWriteBuffer(queue_convolve, in_mem, CL_TRUE, 0, sizeof(float) * l.w*l.w*input_features, input, 0, NULL, NULL);
+		//printf("write conv input\n");
 	}
 	else
 	{
-		
 		in_mem = net.layers[l.id-1].fpga_outbuf;
-		/*printf("in_mem = %x\n",in_mem);
-		float *temp = (float*)malloc(sizeof(float) * l.w*l.w*input_features);
-		printf("size = l.w*l.w*input_features =%d\n",l.w*l.w*input_features); 
-		clEnqueueReadBuffer(queue_convolve, in_mem, CL_TRUE, 0, sizeof(float) * l.w*l.w*input_features, temp , 0, NULL, NULL);
-		int errors = 0;
-		for (int i = 0; i <  l.w*l.w*input_features;i++) 
-			if (errors < 34)
-			if (temp[i] != input[i])
-			{
-				printf("%d error = %f != %f\n",i,temp[i],input[i]);	
-				errors++;
-			}
-		//if (errors > 10)
-		//	getchar();
-		clEnqueueWriteBuffer(queue_convolve, in_mem, CL_TRUE, 0, sizeof(float) * l.w*l.w*input_features, input, 0, NULL, NULL);
-		free(temp);*/
 	}
 	if (l.first == 1)
 	{
@@ -1479,10 +1099,36 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	clSetKernelArg(kernel_coeff_setup, 10, sizeof(int), &l.stride);
 	clSetKernelArg(kernel_coeff_setup, 11, sizeof(int), &one);
 	clSetKernelArg(kernel_coeff_setup, 12, sizeof(int), &no_sub_blocks);
+	int block_size = input_features*l.size*l.size;
+	clSetKernelArg(kernel_coeff_setup, 13, sizeof(int), &block_size);
+	
+	if (l.first == 1)
+	{
+		float div_sqrt_variance[2048];
+
+		if (l.batch_normalize)
+		for (int i = 0; i < l.out_c; i++)
+		{
+			div_sqrt_variance[i] = 1.0f/(sqrt(l.rolling_variance[i]) + .000001f);
+		}
+		float activation_data[1024*4];
+		for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)] = div_sqrt_variance[i];
+		if ( l.batch_normalize)
+		{
+			for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)+1] = l.rolling_mean[i];
+			for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)+2] = l.scales[i];
+		}
+		for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)+3] = l.biases[i];
+		clEnqueueWriteBuffer(queue_coeff, l.fpga_biases_buf, CL_TRUE, 0, sizeof(float) * l.out_c * 4, activation_data, 0, NULL, NULL);
+    }
+	
+	cl_event kernel_event;
+	status = clEnqueueNDRangeKernel(queue_coeff, kernel_coeff_setup, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+	checkError(status, "Failed to launch kernel");
+
 		
 
 	int feature_size_in = l.w*l.w;
-	int feature_size_out = l.out_w*l.out_w;
 	int zero;
 	clSetKernelArg(kernel_convolve, 0, sizeof(cl_mem), &in_mem);
 	clSetKernelArg(kernel_convolve, 1, sizeof(cl_mem), &in_mem);
@@ -1508,70 +1154,71 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	clSetKernelArg(kernel_convolve, 21, sizeof(int), &zero);
 	clSetKernelArg(kernel_convolve, 22, sizeof(int), &zero);
 	clSetKernelArg(kernel_convolve, 23, sizeof(int), &l.c);
-	if (l.fpga_load || (l.first == 1))
-	{
-		float div_sqrt_variance[2048];
-
-		if (l.batch_normalize)
-		for (int i = 0; i < l.out_c; i++)
-		{
-			div_sqrt_variance[i] = 1.0f/(sqrt(l.rolling_variance[i]) + .000001f);
-		}
-		float activation_data[1024*4];
-		for (int i = 0; i < l.out_c; i++) activation_data[i] = div_sqrt_variance[i];
-		if ( l.batch_normalize)
-		{
-			for (int i = 0; i < l.out_c; i++) activation_data[i+l.out_c] = l.rolling_mean[i];
-			for (int i = 0; i < l.out_c; i++) activation_data[i+l.out_c*2] = l.scales[i];
-		}
-		for (int i = 0; i < l.out_c; i++) activation_data[i+l.out_c*3] = l.biases[i];
+	unsigned char stride_shift = ((l.stride==2)?1:0);
+	unsigned short block_count = 0;
+	unsigned short filter_blocks = l.c>>STRIPES_DIV;
+	filter_blocks = filter_blocks == 0 ? 1 : filter_blocks;
+	unsigned int total_block_count = filter_blocks*l.size*l.size*(ln_rounded>>STRIPES_DIV)*(sub_block_size_x>>stride_shift) * ( sub_block_size_y>>stride_shift);
+	// Wait for previous kernels to finish
+	clSetKernelArg(kernel_convolve, 24, sizeof(int), &total_block_count);
+	unsigned char power = 10;
+	//clSetKernelArg(kernel_convolve, 25, sizeof(unsigned char), &power);
 
 
-		if (l.batch_normalize)
-		for (int i = 0; i < l.out_c; i++)
-		{
-			div_sqrt_variance[i] = 1.0f/(sqrt(l.rolling_variance[i]) + .000001f);
-		}
-		clEnqueueWriteBuffer(queue_activation, l.fpga_biases_buf, CL_TRUE, 0, sizeof(float) * l.out_c * 4, activation_data, 0, NULL, NULL);
-        }
+	status = clFinish(queue_activation);
+	status = clEnqueueNDRangeKernel(queue_convolve, kernel_convolve, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+	checkError(status, "Failed to launch kernel");
+	unsigned long start = 0;
+	unsigned long end = 0;
+	unsigned long duration;
+	//printf("Conv total kernel time = %f secs\n",total_kernel_time*1e-9);
+
 	int bnorm = l.batch_normalize?1:0;
 	// activation and bias calculations
 	int out_size = l.out_h*l.out_w;
 	int activation = ((l.activation == LEAKY)||(l.activation == BINARY))? FPGA_LEAKY:FPGA_LINEAR;
-	clSetKernelArg(kernel_convolve, 24, sizeof(cl_mem), &l.fpga_biases_buf);
-	clSetKernelArg(kernel_convolve, 25, sizeof(int), & l.batch_normalize );
-	clSetKernelArg(kernel_convolve, 26, sizeof(int), &activation );
-
-	cl_event kernel_event;
-	status = clEnqueueNDRangeKernel(queue_coeff, kernel_coeff_setup, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-	checkError(status, "Failed to launch kernel");
-
-	status = clEnqueueNDRangeKernel(queue_convolve, kernel_convolve, 1, NULL, gSize, wgSize, 0, NULL,  &kernel_event);
-	checkError(status, "Failed to launch kernel");
-
-	status = clWaitForEvents(1,&kernel_event);
+	clSetKernelArg(kernel_activation, 0, sizeof(cl_mem), &l.fpga_outbuf);
+	clSetKernelArg(kernel_activation, 1, sizeof(unsigned short), &divy);
+	clSetKernelArg(kernel_activation, 2, sizeof(unsigned short), &divx);
+	clSetKernelArg(kernel_activation, 3, sizeof(int), &sub_block_size_x);
+	clSetKernelArg(kernel_activation, 4, sizeof(int), &sub_block_size_y);
+	clSetKernelArg(kernel_activation, 5, sizeof(int), &l.batch);
+	clSetKernelArg(kernel_activation, 6, sizeof(int), &l.groups);
+	clSetKernelArg(kernel_activation, 7, sizeof(int), &l.nweights);
+	clSetKernelArg(kernel_activation, 8, sizeof(int), &l.w);
+	clSetKernelArg(kernel_activation, 9, sizeof(int), &l.out_w);
+	clSetKernelArg(kernel_activation, 10, sizeof(int), &l.size);
+	clSetKernelArg(kernel_activation, 11, sizeof(int), &l.pad);
+	clSetKernelArg(kernel_activation, 12, sizeof(int), &l.c);
+	clSetKernelArg(kernel_activation, 13, sizeof(int), &ln_rounded);
+	clSetKernelArg(kernel_activation, 14, sizeof(int), &l.stride);
+	clSetKernelArg(kernel_activation, 15, sizeof(int), &zero);
+	clSetKernelArg(kernel_activation, 16, sizeof(int), &zero);
+	clSetKernelArg(kernel_activation, 17, sizeof(cl_mem), &l.fpga_scales_buf);
+	clSetKernelArg(kernel_activation, 18, sizeof(int), &zero);
+	clSetKernelArg(kernel_activation, 19, sizeof(int), &zero);
+	clSetKernelArg(kernel_activation, 20, sizeof(int), &zero);
+	clSetKernelArg(kernel_activation, 21, sizeof(int), &l.c);
+	clSetKernelArg(kernel_activation, 22, sizeof(cl_mem), &l.fpga_biases_buf);
+	clSetKernelArg(kernel_activation, 23, sizeof(int), & l.batch_normalize );
+	clSetKernelArg(kernel_activation, 24, sizeof(int), &activation );
 	
-	unsigned long start = 0;
-	unsigned long end = 0;
-	clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start,NULL);
-	clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end,NULL);
-	unsigned long duration = end - start;
-	total_kernel_time += duration;
-	printf("kernel time = %f secs\n",duration*1e-9);
-	printf("total time = %f secs\n",total_kernel_time*1e-9);
-
-
-	//status = clEnqueueNDRangeKernel(queue_activation, kernel_activation, 1, NULL, gSize, wgSize, 0, NULL, &kernel_event);
+	status = clEnqueueNDRangeKernel(queue_activation, kernel_activation, 1, NULL, gSize, wgSize, 0, NULL, NULL);
 	//float *temp_results = new float[l.out_w*l.out_w*ln_rounded];
+	//
 	//status = clFinish(queue_activation);
 	//clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start,NULL);
 	//clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end,NULL);
 	//duration = end - start;
-	//printf("kernel time = %f secs\n",duration*1e-9);
+	//printf("Activation kernel time = %f secs\n",duration*1e-9);
 	//total_kernel_time += duration;
-
+	//	status = clFinish(queue_activation);
 	if (l.fpga_save)
+	{
+		status = clFinish(queue_activation);
 		clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * feature_size_out*ln_rounded, output, 0, NULL, NULL);
+		printf("read conv output\n");
+	}
 	// Check queue has completed, in case we are not using a blocking function.
 	checkError(status, "Failed to finish");
 	return;
@@ -1637,8 +1284,6 @@ void route_layer_fpga_striped(float *inbuf1,
 
 extern "C" void forward_route_layer_fpga(const route_layer l, network net)
 {
-	printf("FPGA route layer\n");
-	printf("mem out = %x\n",l.fpga_outbuf);
 #ifdef HARDWARE
 	bool hardware_enabled = true;
 #else
@@ -1646,68 +1291,72 @@ extern "C" void forward_route_layer_fpga(const route_layer l, network net)
 #endif
 	if (hardware_enabled)
 	{
-	route_layer a,b,c;
-	a = net.layers[l.input_layers[0]];
-	b = net.layers[l.input_layers[1]];
-	c = net.layers[l.id+1]; // Next layer
-	unsigned int features1 = a.c;
-	unsigned int feature_size1 = a.out_w*a.out_w;
-	unsigned int features2 = l.n == 2 ? b.c:0;
-	unsigned int feature_size2 = l.n == 2? b.out_w*b.out_w:0;	
-	unsigned int features3 =  l.n == 2 ?c.c:a.c;
-	unsigned int feature_size3 = l.n == 2 ? c.out_w*c.out_w: a.out_w*a.out_w;
-
-   	unsigned int layer_size1 = l.input_sizes[0];
-    	unsigned int layer_size2 = l.n==2?l.input_sizes[1]:0;
-    	float *input0_data = net.layers[l.input_layers[0]].output;
-   	float *input1_data = l.n==2?net.layers[l.input_layers[1]].output:0;
-	cl_mem mem0 = net.layers[l.input_layers[0]].fpga_outbuf;
-	cl_int status;
-	cl_mem mem1 = l.n==2?net.layers[l.input_layers[1]].fpga_outbuf:NULL;
-
-	if (!hardware_enabled || (l.fpga_load == 1))
-	{
-		float *unstriped_input1 = (float*)malloc(features1*feature_size1*sizeof(float));
-		float *unstriped_input2 = (float*)malloc(features2*feature_size2*sizeof(float));
-
-		route_stripe_input_data(features1,feature_size1,a.output,unstriped_input1);
-		clEnqueueWriteBuffer(queue_activation, mem0 , CL_TRUE, 0, sizeof(float) * (layer_size1), unstriped_input1 , 0, NULL, NULL);
-		if (mem1)
-		{
-			route_stripe_input_data(features2,feature_size2,b.output,unstriped_input2);
-			clEnqueueWriteBuffer(queue_activation, mem1 , CL_TRUE, 0, sizeof(float) * (layer_size2), unstriped_input2 , 0, NULL, NULL);
-		}
-		free(unstriped_input1);
-		free(unstriped_input2);
-	}
-	clSetKernelArg(kernel_route, 0, sizeof(cl_mem), &mem0 );
-	clSetKernelArg(kernel_route, 1, sizeof(cl_mem), l.n==2?&mem1:&mem0 );
-	clSetKernelArg(kernel_route, 2, sizeof(cl_mem), &l.fpga_outbuf);
-	clSetKernelArg(kernel_route, 3, sizeof(int), &layer_size1);
-	clSetKernelArg(kernel_route, 4, sizeof(int), &layer_size2);
-	clSetKernelArg(kernel_route, 5, sizeof(int), &l.n);
-	cl_event kernel_event;
-	status = clEnqueueNDRangeKernel(queue_activation, kernel_route, 1, NULL, gSize, wgSize, 0, NULL, &kernel_event);
-
-	status = clFinish(queue_activation);
-	
-
-
-
-
-	if (!hardware_enabled || (l.fpga_save == 1))
-	{		
-		float *striped_output = (float*)malloc((layer_size1+layer_size2)*sizeof(float));
-		clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * (layer_size1+layer_size2),striped_output , 0, NULL, NULL);
+		route_layer a,b,c;
 		a = net.layers[l.input_layers[0]];
-		printf("features = %d\n",features3);
-		printf("feature_size = %d\n",feature_size3);
-		remove_stripes(features3,feature_size3,striped_output,l.output,0);
+		b = net.layers[l.input_layers[1]];
+		c = net.layers[l.id+1]; // Next layer
+		unsigned int features1 = a.c;
+		unsigned int feature_size1 = a.out_w*a.out_w;
+		unsigned int features2 = l.n == 2 ? b.c:0;
+		unsigned int feature_size2 = l.n == 2? b.out_w*b.out_w:0;
+		unsigned int features3 =  l.n == 2 ?c.c:a.c;
+		unsigned int feature_size3 = l.n == 2 ? c.out_w*c.out_w: a.out_w*a.out_w;
 
-		free(striped_output);
-	}
-	// Check queue has completed, in case we are not using a blocking function.
-	checkError(status, "Failed to finish");
+		unsigned int layer_size1 = l.input_sizes[0];
+		unsigned int layer_size2 = l.n==2?l.input_sizes[1]:0;
+		float *input0_data = net.layers[l.input_layers[0]].output;
+		float *input1_data = l.n==2?net.layers[l.input_layers[1]].output:0;
+		cl_mem mem0 = net.layers[l.input_layers[0]].fpga_outbuf;
+		cl_int status;
+		cl_mem mem1 = l.n==2?net.layers[l.input_layers[1]].fpga_outbuf:NULL;
+
+		if (!hardware_enabled || (l.fpga_load == 1))
+		{
+			float *unstriped_input1 = (float*)malloc(features1*feature_size1*sizeof(float));
+			float *unstriped_input2 = (float*)malloc(features2*feature_size2*sizeof(float));
+
+			route_stripe_input_data(features1,feature_size1,a.output,unstriped_input1);
+			clEnqueueWriteBuffer(queue_activation, mem0 , CL_TRUE, 0, sizeof(float) * (layer_size1), unstriped_input1 , 0, NULL, NULL);
+			if (mem1)
+			{
+				route_stripe_input_data(features2,feature_size2,b.output,unstriped_input2);
+				clEnqueueWriteBuffer(queue_activation, mem1 , CL_TRUE, 0, sizeof(float) * (layer_size2), unstriped_input2 , 0, NULL, NULL);
+			}
+			free(unstriped_input1);
+			free(unstriped_input2);
+		}
+		clSetKernelArg(kernel_route, 0, sizeof(cl_mem), &mem0 );
+		clSetKernelArg(kernel_route, 1, sizeof(cl_mem), l.n==2?&mem1:&mem0 );
+		clSetKernelArg(kernel_route, 2, sizeof(cl_mem), &l.fpga_outbuf);
+		clSetKernelArg(kernel_route, 3, sizeof(int), &layer_size1);
+		clSetKernelArg(kernel_route, 4, sizeof(int), &layer_size2);
+		clSetKernelArg(kernel_route, 5, sizeof(int), &l.n);
+		cl_event kernel_event;
+		status = clEnqueueNDRangeKernel(queue_activation, kernel_route, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+
+
+
+
+
+		if (!hardware_enabled || (l.fpga_save == 1))
+		{
+			status = clFinish(queue_activation);
+	
+			float *striped_output = (float*)malloc((l.out_c*feature_size3)*sizeof(float));
+			clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * (layer_size1+layer_size2),striped_output , 0, NULL, NULL);
+			a = net.layers[l.input_layers[0]];
+			printf("features = %d\n",features3);
+			printf("feature_size = %d\n",feature_size3);
+			remove_stripes(l.out_c,feature_size3,striped_output,l.output,0);
+	
+			free(striped_output);
+		}
+		// Check queue has completed, in case we are not using a blocking function.
+		if (hardware_enabled)
+		{
+			checkError(status, "Failed to finish");
+			//clReleaseEvent(kernel_event);
+		}
 	}
 	else
 	{
@@ -1725,177 +1374,6 @@ extern "C" void forward_route_layer_fpga(const route_layer l, network net)
 					 );
 	}
 	return;
-
-#ifdef OLD
-
-	float *unstriped_output = (float*)malloc(features3*feature_size3*sizeof(float));
-
-	route_stripe_input_data(features1,feature_size1,a.output,unstriped_input1);
-	getchar();
-	if (l.n == 2)
-		route_stripe_input_data(features2,feature_size2,b.output,unstriped_input2);
-	
-	printf("b.c = %d\n",b.c);
-	printf("b.n = %d\n",b.n);
-	printf("features2 = %d\n",features2);
-	printf("features2 = %d\n",features2);
-	printf("features_size2 = %d\n",feature_size2);
-	printf("features1 = %d\n",features1);
-	printf("features3 = %d\n",features3);
-	printf("features_size1 = %d\n",feature_size1);
-	printf("features_size3 = %d\n",feature_size3);
-	printf("unstriped_input2 = %x\n",unstriped_input2);
-	printf("b.output = %x\n",b.output);
-	
-	route_layer_fpga_striped(
-		  unstriped_input1,
-		  unstriped_input2,
-		  unstriped_output,
-		  features1,
-		  feature_size1,
-		  features2,
-		  feature_size2,
-		  // Output stripe feature size
-		  features3,
-		  feature_size3);
-
-	remove_stripes(features3,feature_size3,unstriped_output,l.output,0);
-
-
-	free(unstriped_input1);
-	if (feature_size2)
-		free(unstriped_input2);
-	free(unstriped_output);
-
-	return;
-
-
-    // Route layer uses other parts of the network for data and has no input of it's own, only output
-
-	if (hardware_enabled)
-	{
-		// Find input layers
-		cl_mem input0,input1;
-		cl_int status;
-		cl_event kernel_event;
-	
-		input0 = net.layers[l.input_layers[0]].fpga_outbuf;
-		input1 = net.layers[l.input_layers[1]].fpga_outbuf;
-		printf("input0 w = %d\n",net.layers[l.input_layers[0]].w);
-		printf("input0 out w = %d\n",net.layers[l.input_layers[0]].out_w);
-		printf("input1 out w = %d\n",net.layers[l.input_layers[1]].w);
-		printf("input1 w = %d\n",net.layers[l.input_layers[1]].out_w);
-		printf("input0 l.c = %d\n",net.layers[l.input_layers[0]].c);
-		printf("input1 l.c = %d\n",net.layers[l.input_layers[1]].c);
-	        printf("net.layers[l.input_layers[0]].type = %d\n",net.layers[l.input_layers[0]].type);
-	        printf("net.layers[l.input_layers[1]].type = %d\n",net.layers[l.input_layers[1]].type);
-	    	unsigned int layer_size1 = l.input_sizes[0];
-	    	unsigned int layer_size2 = l.n==2?l.input_sizes[1]:0;
-		printf("input0 = %x\n",input0);
-		printf("input1 = %x\n",input1);
-		printf("layer_size1= %x\n",layer_size1);
-		printf("layer_size2= %x\n",layer_size2);
-
-		printf("l.fpga_outbuf= %x\n",l.fpga_outbuf);
-		int l_c0 = net.layers[l.input_layers[0]].c;
-		int l_c1 = net.layers[l.input_layers[1]].c;
-		int l_w0 = net.layers[l.input_layers[0]].out_w;
-		int l_w1 = net.layers[l.input_layers[1]].out_w;
-
-
-		l_c0 = l_c0 < STRIPES? STRIPES: l_c0;
-		l_c1 = l_c1 < STRIPES? STRIPES: l_c1;
-
-		//float *unstriped_input1 = (float*)alignedMalloc(sizeof(float) * (l_c0 * l_w0 * l_w0));
-		//float *unstriped_input2 = (float*)alignedMalloc(sizeof(float) * (l_c1 * l_w1 * l_w1));
-		
-		//if (!hardware_enabled || (l.fpga_save == 1))
-	    	float *input0_data = net.layers[l.input_layers[0]].output;
-    		float *input1_data = l.n==2?net.layers[l.input_layers[1]].output:0;
-		// Read data from previeous frames
-		//clEnqueueReadBuffer(queue_activation, input0, CL_TRUE, 0, sizeof(float) * ((l_c0 * l_w0 * l_w0)), input0_data , 0, NULL, NULL);
-		//if (layer_size2 != 0)
-		//	clEnqueueReadBuffer(queue_activation, input1, CL_TRUE, 0, sizeof(float) * ( (l_c1 * l_w1 * l_w1)), input1_data , 0, NULL, NULL);
-		//
-		//remove_stripes(l_c0,l_w0*l_w0,input0_data,unstriped_input1);
-		//if (layer_size2 != 0)
-		//	remove_stripes(l_c1,l_w1*l_w1,input1_data,unstriped_input2);
-		
-		printf("l.n = %d\n",l.n);
-		clEnqueueWriteBuffer(queue_activation, input0, CL_TRUE, 0, sizeof(float) * (layer_size1), input0_data , 0, NULL, NULL);
-		clEnqueueWriteBuffer(queue_activation, input1, CL_TRUE, 0, sizeof(float) * (layer_size2), input1_data , 0, NULL, NULL);
-	
-
-		/*int errors = 0;
-		for (int i = 0; i < layer_size1; i ++)
-			if (unstriped_input1[i] != net.layers[l.input_layers[0]].output[i])
-			{
-				printf("error %d : %f not %f : input0_data=%f\n",i,unstriped_input1[i],net.layers[l.input_layers[0]].output[i],input0_data[i]);
-				errors++;
-				if (errors > 64) break;
-			}		*/
-
-		    	/*route_layer_fpga(unstriped_input1,
-	    					unstriped_input2,
-							 l.output,
-							 layer_size1,
-							 layer_size2,
-							 l.n
-							 );*/
-
-
-		clSetKernelArg(kernel_route, 0, sizeof(cl_mem), &input0);
-		clSetKernelArg(kernel_route, 1, sizeof(cl_mem), &input1);
-		clSetKernelArg(kernel_route, 2, sizeof(cl_mem), &l.fpga_outbuf);
-		clSetKernelArg(kernel_route, 3, sizeof(int), &layer_size1);
-		clSetKernelArg(kernel_route, 4, sizeof(int), &layer_size2);
-		clSetKernelArg(kernel_route, 5, sizeof(int), &l.n);
-	
-		status = clEnqueueNDRangeKernel(queue_activation, kernel_route, 1, NULL, gSize, wgSize, 0, NULL, &kernel_event);
-	
-		status = clFinish(queue_activation);
-		float *striped_output;
-		//if (!hardware_enabled || (l.fpga_save == 1))
-		{
-		//	striped_output = (float*)alignedMalloc((layer_size1+layer_size2)*sizeof(float));
-			clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * (layer_size1+layer_size2), l.output , 0, NULL, NULL);
-		}
-		// Check queue has completed, in case we are not using a blocking function.
-		checkError(status, "Failed to finish");
-		printf("free arrays\n");
-		//printf("unstriped_input1 = %x\n",unstriped_input1);
-		//printf("unstriped_input2 = %x\n",unstriped_input2);
-		//alignedFree(unstriped_input1);
-
-		//if (layer_size2)
-		//	alignedFree(unstriped_input2);
-	
-	}
-	else
-	{
-	    // Assuming route size of two
-	    if ((l.n != 2) && (l.n != 1))
-	    {
-	    	assert("Unsupported number of routes");
-	    }
-	    else
-	    {
-
-	    	unsigned int layer_size1 = l.input_sizes[0];
-	    	unsigned int layer_size2 = l.n==2?l.input_sizes[1]:0;
-	    	float *input0 = net.layers[l.input_layers[0]].output;
-	    	float *input1 = l.n==2?net.layers[l.input_layers[1]].output:0;
-
-	    	route_layer_fpga(input0,
-	    					 input1,
-							 l.output,
-							 layer_size1,
-							 layer_size2,
-							 l.n
-							 );
-	    }
-	}
-#endif
 }
 
 

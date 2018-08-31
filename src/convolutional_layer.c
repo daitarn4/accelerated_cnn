@@ -387,31 +387,6 @@ void denormalize_convolutional_layer(convolutional_layer l)
     }
 }
 
-/*
-void test_convolutional_layer()
-{
-    convolutional_layer l = make_convolutional_layer(1, 5, 5, 3, 2, 5, 2, 1, LEAKY, 1, 0, 0, 0);
-    l.batch_normalize = 1;
-    float data[] = {1,1,1,1,1,
-        1,1,1,1,1,
-        1,1,1,1,1,
-        1,1,1,1,1,
-        1,1,1,1,1,
-        2,2,2,2,2,
-        2,2,2,2,2,
-        2,2,2,2,2,
-        2,2,2,2,2,
-        2,2,2,2,2,
-        3,3,3,3,3,
-        3,3,3,3,3,
-        3,3,3,3,3,
-        3,3,3,3,3,
-        3,3,3,3,3};
-    //net.input = data;
-    //forward_convolutional_layer(l);
-}
-*/
-
 void resize_convolutional_layer(convolutional_layer *l, int w, int h)
 {
     l->w = w;
@@ -575,7 +550,7 @@ void forward_convolutional_layer(convolutional_layer l, network net)
     		a =temp[i]*1024;
     		b =l.output[i]*1024;
 
-    		if (fabs(a-b) > 0)
+    		if (fabs(a-b) > 32)
     		//if (fabs(a-b) > 32)
     		{
     			printf("fpga does not match software! %d vs %d @ %d\n",a,b,i);
@@ -731,10 +706,6 @@ void forward_convolutional_layer(convolutional_layer l, network net)
 #endif
 #endif
 
-#ifndef FPGA
-#else
-    // Handled as part of convolution
-#endif
 
     if(l.binary || l.xnor) swap_binary(&l);
     double end = what_time_is_it_now();

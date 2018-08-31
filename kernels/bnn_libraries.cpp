@@ -142,10 +142,10 @@ void CountBitsHDL16x16(short input[16],unsigned int binary_coeffs[16],int result
 // Convert input from float to integer efficiently!
 short FloatToShort(float a,const short power)
 {
-	//#ifdef USE_LIBS
-	//return FloatToShortExp(a,power); // bits to shift not scale
-	//#else
+	#ifdef USE_LIBS
+	return FloatToShortExp(a,power); // bits to shift not scale
+	#else
 	return (short)(a*((short)1<<power));
-	//#endif
+	#endif
 }
 

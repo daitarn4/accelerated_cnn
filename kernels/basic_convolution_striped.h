@@ -15,9 +15,9 @@
 #include <malloc.h>
 #endif
 
-#define PAR_PIX 4
-#define PAR_PIX_SHIFT 2
-#define PAR_PIX_MASK 0x3
+#define PAR_PIX 2
+#define PAR_PIX_SHIFT 1
+#define PAR_PIX_MASK 0x1
 
 #define STRIPES_32
 #ifdef STRIPES_16

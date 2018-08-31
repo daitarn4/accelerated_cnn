@@ -14,13 +14,6 @@
 #include "CL/opencl.h"
 #endif
 #include "conv_binary_fpga.h"
-#define V4
-#ifdef V3
-#include "conv_binary_fpga_v3.h"
-#endif
-#ifdef V4
-#include "conv_binary_fpga_v8.h"
-#endif
 #include "basic_convolution_striped_reduced_mem.h"
 #include "basic_convolution_striped_binary.h"
 #include "basic_convolution_striped.h"
