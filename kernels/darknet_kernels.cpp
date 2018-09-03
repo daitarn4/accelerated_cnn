@@ -122,7 +122,7 @@ bool init(bool binary) {
 
 	std::string binary_file;
 	if (binary)
-		binary_file= getBoardBinaryFile("bin1024_385_v9_par4", device);
+		binary_file= getBoardBinaryFile("darknet", device);
 		//binary_file= getBoardBinaryFile("./kernels/bin1024", device);
 	else
 		binary_file= getBoardBinaryFile("./device/darknet", device);
@@ -193,8 +193,8 @@ extern "C" void host_setup(int binary)
 	init(binary?true:false);
 	// Setup common buffer of input and output
 	cl_int status;
-	inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 512*512*1024 * sizeof(float), NULL, &status);
-	outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 512*512*1024 * sizeof(float), NULL, &status);
+	inbuf = clCreateBuffer(context, CL_MEM_READ_WRITE, 512*512*32 * sizeof(float), NULL, &status);
+	outbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 512*512*32 * sizeof(float), NULL, &status);
 	coeffbuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 1024*1024*9 * sizeof(float), NULL, &status);
 	scalebuf  = clCreateBuffer(context, CL_MEM_READ_ONLY, 1024 * 8 *sizeof(float), NULL, &status);
 
@@ -659,8 +659,6 @@ extern "C" void forward_upsample_layer_fpga(const layer l, network net)
 	cl_mem out_mem = l.fpga_outbuf;
 	int insize = l.w*l.w;
 	int size = l.out_w*l.out_h;
-	printf("FPGA upsample layer!\n");
-
 
 	clSetKernelArg(kernel_upsample, 0, sizeof(cl_mem), &in_mem);
 	clSetKernelArg(kernel_upsample, 1, sizeof(cl_mem), &out_mem);
@@ -1062,9 +1060,10 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	int input_features = l.c;
 	if (input_features < STRIPES)
 		input_features = STRIPES;
+	// Wait for queue to finished
+	status = clFinish(queue_activation);
 
 	// Write input to kernel global memory
-	int feature_size_out = l.out_w*l.out_w;
 	cl_mem in_mem;
 	if (l.fpga_load)
 	{
@@ -1099,8 +1098,8 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	clSetKernelArg(kernel_coeff_setup, 10, sizeof(int), &l.stride);
 	clSetKernelArg(kernel_coeff_setup, 11, sizeof(int), &one);
 	clSetKernelArg(kernel_coeff_setup, 12, sizeof(int), &no_sub_blocks);
-	int block_size = input_features*l.size*l.size;
-	clSetKernelArg(kernel_coeff_setup, 13, sizeof(int), &block_size);
+	int block_size_i = input_features*l.size*l.size;
+	clSetKernelArg(kernel_coeff_setup, 13, sizeof(int), &block_size_i);
 	
 	if (l.first == 1)
 	{
@@ -1120,20 +1119,19 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 		}
 		for (int i = 0; i < l.out_c; i++) activation_data[(i<<2)+3] = l.biases[i];
 		clEnqueueWriteBuffer(queue_coeff, l.fpga_biases_buf, CL_TRUE, 0, sizeof(float) * l.out_c * 4, activation_data, 0, NULL, NULL);
-    }
+    	}
 	
-	cl_event kernel_event;
-	status = clEnqueueNDRangeKernel(queue_coeff, kernel_coeff_setup, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-	checkError(status, "Failed to launch kernel");
-
-		
+	//cl_event kernel_event;		
 
 	int feature_size_in = l.w*l.w;
+	int feature_size_out = l.out_w*l.out_w;
 	int zero;
+	unsigned char scale = BINARY_FLOAT_SCALE;
+	
 	clSetKernelArg(kernel_convolve, 0, sizeof(cl_mem), &in_mem);
 	clSetKernelArg(kernel_convolve, 1, sizeof(cl_mem), &in_mem);
 	clSetKernelArg(kernel_convolve, 2, sizeof(cl_mem), &l.fpga_outbuf);
-	clSetKernelArg(kernel_convolve, 3, sizeof(unsigned short), &divy);
+	clSetKernelArg(kernel_convolve, 3, sizeof(unsigned short), &divy); 
 	clSetKernelArg(kernel_convolve, 4, sizeof(unsigned short), &divx);
 	clSetKernelArg(kernel_convolve, 5, sizeof(int), &sub_block_size_x);
 	clSetKernelArg(kernel_convolve, 6, sizeof(int), &sub_block_size_y);
@@ -1154,24 +1152,26 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	clSetKernelArg(kernel_convolve, 21, sizeof(int), &zero);
 	clSetKernelArg(kernel_convolve, 22, sizeof(int), &zero);
 	clSetKernelArg(kernel_convolve, 23, sizeof(int), &l.c);
+	
 	unsigned char stride_shift = ((l.stride==2)?1:0);
+	unsigned short block_size = (sub_block_size_x>>stride_shift) * ( sub_block_size_y>>stride_shift);
+	unsigned short input_block_size = sub_block_size_x*sub_block_size_y;
+	short o_f = 0;
+
+	unsigned short feature_offset = 0;
 	unsigned short block_count = 0;
 	unsigned short filter_blocks = l.c>>STRIPES_DIV;
 	filter_blocks = filter_blocks == 0 ? 1 : filter_blocks;
-	unsigned int total_block_count = filter_blocks*l.size*l.size*(ln_rounded>>STRIPES_DIV)*(sub_block_size_x>>stride_shift) * ( sub_block_size_y>>stride_shift);
-	// Wait for previous kernels to finish
+
+	// block_size is divided by PAR pix
+	unsigned int block_size_modified = block_size/PAR_PIX + ((block_size&PAR_PIX_MASK)?1:0);
+	unsigned int total_block_count = filter_blocks*l.size*l.size*(ln_rounded>>STRIPES_DIV)*block_size_modified;	
 	clSetKernelArg(kernel_convolve, 24, sizeof(int), &total_block_count);
-	unsigned char power = 10;
-	//clSetKernelArg(kernel_convolve, 25, sizeof(unsigned char), &power);
+	clSetKernelArg(kernel_convolve, 25, sizeof(unsigned char), &scale);
 
-
-	status = clFinish(queue_activation);
-	status = clEnqueueNDRangeKernel(queue_convolve, kernel_convolve, 1, NULL, gSize, wgSize, 0, NULL, NULL);
-	checkError(status, "Failed to launch kernel");
 	unsigned long start = 0;
 	unsigned long end = 0;
 	unsigned long duration;
-	//printf("Conv total kernel time = %f secs\n",total_kernel_time*1e-9);
 
 	int bnorm = l.batch_normalize?1:0;
 	// activation and bias calculations
@@ -1202,25 +1202,31 @@ extern "C" void HardwareRunConvolutionBinary(	float *input, unsigned int *coeffs
 	clSetKernelArg(kernel_activation, 22, sizeof(cl_mem), &l.fpga_biases_buf);
 	clSetKernelArg(kernel_activation, 23, sizeof(int), & l.batch_normalize );
 	clSetKernelArg(kernel_activation, 24, sizeof(int), &activation );
-	
-	status = clEnqueueNDRangeKernel(queue_activation, kernel_activation, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+	status = clEnqueueNDRangeKernel(queue_convolve, kernel_convolve, 1, NULL, gSize, wgSize, 0, NULL,  NULL);
+	checkError(status, "Failed to launch kernel");	
+	status = clEnqueueNDRangeKernel(queue_coeff, kernel_coeff_setup, 1, NULL, gSize, wgSize, 0, NULL, NULL);
+	checkError(status, "Failed to launch kernel");
+	status = clEnqueueNDRangeKernel(queue_activation, kernel_activation, 1, NULL, gSize, wgSize, 0, NULL, NULL);// &kernel_event);
+	checkError(status, "Failed to launch kernel");
+	//printf("Wait for kernels\n");
+
 	//float *temp_results = new float[l.out_w*l.out_w*ln_rounded];
-	//
-	//status = clFinish(queue_activation);
-	//clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start,NULL);
-	//clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end,NULL);
-	//duration = end - start;
-	//printf("Activation kernel time = %f secs\n",duration*1e-9);
-	//total_kernel_time += duration;
-	//	status = clFinish(queue_activation);
+	/*clWaitForEvents(1,&kernel_event);
+	clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start,NULL);
+	clGetEventProfilingInfo(kernel_event,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end,NULL);
+	duration = end - start;
+	printf("Activation kernel time = %f secs\n",duration*1e-9);
+	total_kernel_time += duration;
+	printf("total_kernel_time time = %f secs\n",total_kernel_time*1e-9);*/
+
 	if (l.fpga_save)
 	{
-		status = clFinish(queue_activation);
 		clEnqueueReadBuffer(queue_activation, l.fpga_outbuf, CL_TRUE, 0, sizeof(float) * feature_size_out*ln_rounded, output, 0, NULL, NULL);
-		printf("read conv output\n");
 	}
+
 	// Check queue has completed, in case we are not using a blocking function.
 	checkError(status, "Failed to finish");
+	//clReleaseEvent(kernel_event);
 	return;
 }
 
@@ -1331,7 +1337,7 @@ extern "C" void forward_route_layer_fpga(const route_layer l, network net)
 		clSetKernelArg(kernel_route, 3, sizeof(int), &layer_size1);
 		clSetKernelArg(kernel_route, 4, sizeof(int), &layer_size2);
 		clSetKernelArg(kernel_route, 5, sizeof(int), &l.n);
-		cl_event kernel_event;
+		//cl_event kernel_event;
 		status = clEnqueueNDRangeKernel(queue_activation, kernel_route, 1, NULL, gSize, wgSize, 0, NULL, NULL);
 
 

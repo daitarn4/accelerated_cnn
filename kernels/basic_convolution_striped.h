@@ -32,7 +32,7 @@
 	#define STRIPES_BIT_MASK 0xffffffff
 	#define STRIPES_BITS 32
 #endif
-#define BINARY_FLOAT_SCALE 10
+#define BINARY_FLOAT_SCALE 6
 
 // Darknet 19 batchsize
 //#define MAX_BATCH_SIZE (49)

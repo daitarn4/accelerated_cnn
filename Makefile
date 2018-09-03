@@ -1,12 +1,12 @@
 GPU=0
 FPGA=1
-HARDWARE=0
+HARDWARE=1
 CUDNN=0
 OPENCV=0
-OPENMP=0
-DEBUG=1
-CYGWIN=1
-TEST=1
+OPENMP=1
+DEBUG=0
+CYGWIN=0
+TEST=0
 
 ARCH= -gencode arch=compute_30,code=sm_30 \
       -gencode arch=compute_35,code=sm_35 \

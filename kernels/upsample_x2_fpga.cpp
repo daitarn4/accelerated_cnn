@@ -29,7 +29,6 @@ void upsample_x2_fpga(float* inbuf, float* outbuf,
 								   unsigned int stripe_output_block_size)
 #endif
 {
-	//printf("upsample fpga\n");
 	unsigned int stripes_input_offset = 0;
 	unsigned int stripes_output_offset = 0;
 	unsigned int loop_size = (in_f>>STRIPES_DIV) * output_filter_size;
